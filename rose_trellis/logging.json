@@ -1,0 +1,45 @@
+{
+    "version": 1,
+    "loggers": {
+        "": {
+            "propagate": true,
+            "handlers": [
+                "console",
+                "file"
+            ],
+            "level": "DEBUG"
+        },
+        "websockets": {
+            "level": "INFO"
+        },
+        "asyncio": {
+            "level": "WARNING"
+        },
+        "parsedatetime": {
+            "level": "INFO"
+        },
+        "async_rose_trellis": {
+            "level": "INFO"
+        }
+    },
+    "formatters": {
+        "simple": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {
+            "formatter": "simple",
+            "stream": "ext://sys.stdout",
+            "level": "INFO",
+            "class": "logging.StreamHandler"
+        },
+        "file": {
+            "formatter": "simple",
+            "level": "DEBUG",
+            "class": "logging.FileHandler",
+            "filename": "log.log"
+        }
+    },
+    "disable_existing_loggers": false
+}
