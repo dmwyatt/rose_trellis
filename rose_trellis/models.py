@@ -2,6 +2,7 @@ import abc
 import asyncio
 import logging
 import time
+import itertools
 
 from dateutil import parser
 from typing import Any, Tuple, List, Union
@@ -96,8 +97,12 @@ class TrelloObject(metaclass=abc.ABCMeta):
 
 	@abc.abstractclassmethod
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
-		"""Retrieves data from Trello for this instance.
+		"""Retrieves data from Trello for the provided id.
 		Implementers return a dict of data used to inflate the object."""
+
+	@abc.abstractclassmethod
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs) -> TrelloObjectCollection:
+		"""Retrieves all instances of this object."""
 
 	@abc.abstractmethod
 	def delete_from_api(self) -> None:
@@ -117,6 +122,11 @@ class Organization(TrelloObject):
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient) -> dict:
 		return (yield from tc.get_organization(id_, fields="all"))
+
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+		raise NotImplementedError
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -161,6 +171,13 @@ class Board(TrelloObject):
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
 		return (yield from tc.get_board(id_, fields="all"))
 
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+		only_open = kwargs.get('only_open', True)
+		boards_data = yield from tc.get_boards(only_open=only_open)
+		return (yield from cls.get_many(boards_data, tc))
+
 	@asyncio.coroutine
 	def delete_from_api(self):
 		raise NotImplementedError("Trello does not permit deleting of boards.  Try `Board.close()`")
@@ -188,6 +205,11 @@ class Board(TrelloObject):
 	@asyncio.coroutine
 	def get_labels(self):
 		return (yield from Label.get_labels(self.id, self.tc))
+
+	@asyncio.coroutine
+	def get_lists(self) -> TrelloObjectCollection:
+		lists_data = yield from self.tc.get_board_lists(self.id)
+		return (yield from Lists.get_many(lists_data, self.tc))
 
 	def __repr__(self):
 		if self._refreshed_at:
@@ -246,11 +268,19 @@ class BoardPrefs:
 		return rep
 
 
-class TrelloList(TrelloObject):
+class Lists(TrelloObject):
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
 		return (yield from tc.get_list(id_, fields="all"))
+
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs) -> TrelloObjectCollection:
+		boards = yield from Board.get_all(tc)
+		lists_getters = [b.get_lists() for b in boards]
+		lists = list(itertools.chain.from_iterable((yield from asyncio.gather(*lists_getters))))
+		return TrelloObjectCollection(lists)
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -273,12 +303,23 @@ class TrelloList(TrelloObject):
 
 		return changes
 
+	def __repr__(self):
+		if self._refreshed_at:
+			return "<List: name='{}', id='{}'>".format(self.name, self.id)
+		else:
+			return "<List: id='{}'>".format(self.id)
+
 
 class Card(TrelloObject):
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient) -> dict:
 		return (yield from tc.get_card(card_id=id_, fields="all"))
+
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+		raise NotImplementedError
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -334,6 +375,11 @@ class Checklist(TrelloObject):
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
 		return (yield from tc.get_checklist(id_))
 
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+		raise NotImplementedError
+
 	@asyncio.coroutine
 	def delete_from_api(self):
 		return (yield from self.tc.delete_checklist(self.id))
@@ -387,6 +433,11 @@ class CheckItem(TrelloObject):
 			raise ValueError("Must provide checklist id to CheckItem")
 		return (yield from tc.get_checkitem(checklist_id, checkitem_id))
 
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+		raise NotImplementedError
+
 	@asyncio.coroutine
 	def delete_from_api(self):
 		return (yield from self.tc.delete_checkitem(self.id, self.checklist.id))
@@ -437,6 +488,11 @@ class Label(TrelloObject):
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
 		return (yield from tc.get_label(id_))
+
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+		raise NotImplementedError
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -495,7 +551,7 @@ api_fields_mapping = (
 	('idChecklist', 'checklist', Checklist.get),
 	('idChecklists', 'checklists', Checklist.get_many),
 	('idCard', 'card', Card.get),
-	('idList', 'list', TrelloList.get)
+	('idList', 'list', Lists.get)
 )
 
 
