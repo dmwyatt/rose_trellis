@@ -564,6 +564,11 @@ def _api_field_to_obj_field(key: str, value: Any, tc: trello_client.TrelloClient
 	:param tc: our TrelloClient
 	:raise ValueError:
 	"""
+
+	# handle empty values
+	if value is None:
+		return key, value
+
 	found = False
 	for api_field_name, obj_field_name, api_to_obj_map in api_fields_mapping:
 		if api_field_name == key:
