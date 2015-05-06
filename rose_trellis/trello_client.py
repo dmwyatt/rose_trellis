@@ -236,6 +236,11 @@ class TrelloClientBoardMixin:
 		url = 'boards/{}'.format(board_id)
 		return (yield from self.put(url, params=data))
 
+	@asyncio.coroutine
+	def get_board_lists(self, board_id) -> Sequence[str]:
+		url = 'boards/{}/lists'.format(board_id)
+		return (yield from self.get(url))
+
 
 class TrelloClientLabelMixin:
 	@asyncio.coroutine
