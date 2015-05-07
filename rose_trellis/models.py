@@ -25,15 +25,17 @@ class TrelloObjectCollection(list):
 
 
 class TrelloObject(metaclass=abc.ABCMeta):
-	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
+	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs) -> None:
 		self.tc = tc
 		self.id = id_
 		self._refreshed_at = 0
 		self.opts = kwargs
+		self.inflate_children = inflate_children
 
 	@classmethod
 	@asyncio.coroutine
-	def get(cls, data_or_id: Union[str, dict], tc: trello_client.TrelloClient, **kwargs) -> 'TrelloObject':
+	def get(cls, data_or_id: Union[str, dict], tc: trello_client.TrelloClient, inflate_children=True,
+	        **kwargs) -> 'TrelloObject':
 		if isinstance(data_or_id, str):
 			id_ = data_or_id
 			data = None
@@ -46,11 +48,11 @@ class TrelloObject(metaclass=abc.ABCMeta):
 		obj = obj_cache.get(id_)
 		if not obj and not data:
 			resp = yield from cls.get_data(id_, tc, **kwargs)
-			obj = cls(resp['id'], tc, **kwargs)
+			obj = cls(resp['id'], tc, inflate_children=inflate_children, **kwargs)
 			obj_cache.set(obj)
 			yield from obj.state_from_api(resp)
 		elif not obj and data:
-			obj = cls(data['id'], tc, **kwargs)
+			obj = cls(data['id'], tc, inflate_children=inflate_children, **kwargs)
 			obj_cache.set(obj)
 			yield from obj.state_from_api(data)
 		elif obj and data:
@@ -61,8 +63,8 @@ class TrelloObject(metaclass=abc.ABCMeta):
 	@classmethod
 	@asyncio.coroutine
 	def get_many(cls, datas_or_ids: List[Union[str, dict]], tc: trello_client.TrelloClient,
-	             **kwargs) -> TrelloObjectCollection:
-		getters = [cls.get(doi, tc, **kwargs) for doi in datas_or_ids]
+	             inflate_children=True, **kwargs) -> TrelloObjectCollection:
+		getters = [cls.get(doi, tc, inflate_children=inflate_children, **kwargs) for doi in datas_or_ids]
 
 		results = yield from asyncio.gather(*getters)
 		return TrelloObjectCollection(results)
@@ -91,8 +93,12 @@ class TrelloObject(metaclass=abc.ABCMeta):
 	def state_from_api(self, api_data):
 		self._raw_data = api_data
 		for k, v in api_data.items():
-			field_name, inflated = yield from _api_field_to_obj_field(k, v, self.tc)
-			setattr(self, field_name, inflated)
+			if self.inflate_children:
+				field_name, inflated = yield from _api_field_to_obj_field(k, v, self.tc)
+				setattr(self, field_name, inflated)
+			else:
+				setattr(self, k, v)
+
 		self._refreshed_at = time.time()
 
 	@abc.abstractclassmethod
@@ -348,7 +354,7 @@ class Card(TrelloObject):
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data):
-		if 'labels' in api_data:
+		if 'labels' in api_data and self.inflate_children:
 			# Redundant info caused by using 'all' filter when getting
 			# card data
 			try:
@@ -395,14 +401,20 @@ class Checklist(TrelloObject):
 		if self.pos != self._raw_data['pos']:
 			changes['pos'] = self.pos
 
-		if self.card.id != self._raw_data['idCard']:
-			changes['idCard'] = self.card.id
+
+		if hasattr(self, 'card'):
+			# if object was created with inflate_children=False, then we won't have a card instance
+			curr_id = self.card.id
+		else:
+			curr_id = self.idCard
+		if curr_id != self._raw_data['idCard']:
+			changes['idCard'] = curr_id
 
 		return changes
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data):
-		if 'checkItems' in api_data:
+		if 'checkItems' in api_data and self.inflate_children:
 			self.check_items = yield from \
 				CheckItem.get_many(
 					api_data['checkItems'], self.tc, checklist_id=api_data['id'], card_id=api_data['idCard'])
@@ -417,7 +429,7 @@ class Checklist(TrelloObject):
 
 
 class CheckItem(TrelloObject):
-	def __init__(self, id_: str, tc: trello_client.TrelloClient, checklist_id: str=None, card_id: str=None) -> None:
+	def __init__(self, id_: str, tc: trello_client.TrelloClient, checklist_id: str=None, card_id: str=None, **kwargs) -> None:
 		if not checklist_id:
 			raise ValueError("Must provide checklist id to CheckItem")
 		if not card_id:
