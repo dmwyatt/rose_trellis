@@ -24,6 +24,6 @@ def join_url(part: str) -> str:
 	return newpath
 
 
-def easy_run(func: Callable[Any], *args, **kwargs) -> Any:
+def easy_run(gen) -> Any:
 	el = asyncio.get_event_loop()
-	return el.run_until_complete(func(*args, **kwargs))
+	return el.run_until_complete(gen)
