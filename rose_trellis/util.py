@@ -1,5 +1,8 @@
 from urllib.parse import urljoin
 import time
+import asyncio
+from typing import Any
+from typing import Callable
 
 
 TRELLO_URL_BASE = 'https://api.trello.com/1/'
@@ -21,21 +24,6 @@ def join_url(part: str) -> str:
 	return newpath
 
 
-def rate_limited(max_per_second):
-	min_interval = 1.0 / float(max_per_second)
-
-	def decorate(func):
-		last_time_called = [0.0]
-
-		def rate_limited_function(*args, **kargs):
-			elapsed = time.clock() - last_time_called[0]
-			left_to_wait = min_interval - elapsed
-			if left_to_wait > 0:
-				time.sleep(left_to_wait)
-			ret = func(*args, **kargs)
-			last_time_called[0] = time.clock()
-			return ret
-
-		return rate_limited_function
-
-	return decorate
+def easy_run(func: Callable[Any], *args, **kwargs) -> Any:
+	el = asyncio.get_event_loop()
+	return el.run_until_complete(func(*args, **kwargs))
