@@ -1,3 +1,6 @@
+"""
+Contains models for the various objects we get from Trello.
+"""
 import abc
 import asyncio
 import logging
@@ -7,25 +10,63 @@ import itertools
 from dateutil import parser
 from typing import Any, Tuple, List, Union
 
-import rose_trellis.base.obj_cache as obj_cache
-import rose_trellis.trello_client as trello_client
+import rosetrellis.base.obj_cache as obj_cache
+import rosetrellis.trello_client as trello_client
+from rosetrellis.util import Synchronizer
 
 
 logger = logging.getLogger(__name__)
 
 
-class TrelloObjectCollection(list):
+class TrelloObjectCollection(list, Synchronizer):
+	"""
+	A list-like object that represents collections of objects inheriting from
+	:class:`TrelloObject`.
+
+	Because this is a subclass of :class:`Synchronizer`, every explicitly
+	declared coroutine method, has a corresponding synchronous method with the
+	same name followed by the suffix ``_s``. For example, the method
+	:meth:`~.TrelloObjectCollection.save` has a partner
+	synchronous method :meth:`~.TrelloObjectCollection.save_s` that is
+	generated at runtime by :class:`Synchronizer`.
+	"""
+
+	@asyncio.coroutine
 	def save(self):
+		"""Save all objects in this list."""
 		save_coros = [obj.save() for obj in self]
 		yield from asyncio.gather(*save_coros)
 
+	@asyncio.coroutine
 	def inflate(self):
 		inflate_coros = [obj.inflate() for obj in self]
 		yield from asyncio.gather(*inflate_coros)
 
 
-class TrelloObject(metaclass=abc.ABCMeta):
+class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
+	"""
+	The base class for all Trello objects.
+
+	Because this is a subclass of :class:`Synchronizer`, every explicitly
+	declared coroutine method, has a corresponding synchronous method with the
+	same name followed by the suffix ``_s``.
+
+	For example, the method	:meth:`~rosetrellis.models.TrelloObject.save` has
+	a partner synchronous method :meth:`~rosetrellis.models.TrelloObject.save_s`
+	that is generated at runtime by :class:`Synchronizer`.
+	"""
+
 	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs) -> None:
+		"""
+		:param id_: A full 24-character Trello object id or the shortLink you see
+			in Trello urls.
+		:param tc: An instance of :class:`.TrelloClient` for us to use for Trello
+			API communication.
+		:param inflate_children: If set to ``False``, we won't automatically
+			inflate related objects, like the :class:`.Board` related to a
+			:class:`.Card`.  You will have to just rely on the ``idBoard``
+			attribute in that case.
+		"""
 		self.tc = tc
 		self.id = id_
 		self._refreshed_at = 0
@@ -34,29 +75,69 @@ class TrelloObject(metaclass=abc.ABCMeta):
 
 	@classmethod
 	@asyncio.coroutine
-	def get(cls, data_or_id: Union[str, dict], tc: trello_client.TrelloClient, inflate_children=True,
-	        **kwargs) -> 'TrelloObject':
+	def get(cls, data_or_id: Union[str, dict],
+	        tc: trello_client.TrelloClient,
+	        inflate_children=True,
+	        **kwargs):
+		"""
+		A coroutine.
+
+		Gets and creates TrelloObjects.
+
+		If provided with a string ID, we attempt to get the object from our
+		object cache. If that fails we build a new object out of data from
+		provided TrelloClient.
+
+		If provided with a mapping of key-value pairs, we build an object out
+		of that data.
+
+		:param data_or_id:  Either an object id, where the id is from Trello, or a
+			dict of key-value pairs as returned from the Trello API.
+
+		:param tc:  Instance of :class:`~.TrelloClient`.
+
+		:param inflate_children: If set to ``False``, we won't automatically
+			inflate related objects, like the :class:`.Board` related  to
+			a :class:`.Card`.  You will have to just rely on the
+			``idBoard`` attribute in that case.
+
+		:raises TypeError: if you don't provide a string or a dict for `data_or_id`.
+		:raises ValueError: if you don't provide a dict with an 'id' key.
+
+		:rtype: :class:`~.TrelloObject`
+		:returns: One of the classes implementing ``TrelloObject``.  For example,
+			:class:`.Card` or :class:`.Organization`.
+		"""
+
 		if isinstance(data_or_id, str):
 			id_ = data_or_id
 			data = None
 		elif isinstance(data_or_id, dict):
 			id_ = data_or_id['id']
 			data = data_or_id
+		elif 'id' not in data_or_id:
+			raise ValueError("Must provide a mapping with an 'id' key.")
 		else:
 			raise TypeError("Must provide either a str id or a dict of object data")
 
 		obj = obj_cache.get(id_)
+
 		if not obj and not data:
+			logger.debug("No cached object and no provided data, requesting data from TrelloClient.")
 			resp = yield from cls.get_data(id_, tc, **kwargs)
 			obj = cls(resp['id'], tc, inflate_children=inflate_children, **kwargs)
 			obj_cache.set(obj)
-			yield from obj.state_from_api(resp)
+			yield from obj.state_from_api(resp, inflate_children=inflate_children)
+
 		elif not obj and data:
+			logger.debug("No cached object.  Building object from provided data.")
 			obj = cls(data['id'], tc, inflate_children=inflate_children, **kwargs)
 			obj_cache.set(obj)
-			yield from obj.state_from_api(data)
+			yield from obj.state_from_api(data, inflate_children=inflate_children)
+
 		elif obj and data:
-			yield from obj.state_from_api(data)
+			logger.debug("Found cached object.  Updating with provided data.")
+			yield from obj.state_from_api(data, inflate_children=inflate_children)
 
 		return obj
 
@@ -64,6 +145,27 @@ class TrelloObject(metaclass=abc.ABCMeta):
 	@asyncio.coroutine
 	def get_many(cls, datas_or_ids: List[Union[str, dict]], tc: trello_client.TrelloClient,
 	             inflate_children=True, **kwargs) -> TrelloObjectCollection:
+		"""
+		A coroutine.
+
+		Asynchronously call :meth:`~.get` for each item in ``datas_or_ids``
+
+		:param datas_or_ids: A list of ids (and/or actual already-retrieved data)
+			to create objects out of.
+
+		:param tc:  Used to communicate with Trello API.
+
+		:param inflate_children: If set to ``False``, we won't automatically
+			inflate related objects, like the :class:`.Board` related  to
+			a :class:`.Card`.  You will have to just rely on the
+			``idBoard`` attribute in that case.
+
+		:returns: A list of objects.
+
+		See Also:
+			:meth:`~.get`
+			:meth:`~.get_all`
+		"""
 		getters = [cls.get(doi, tc, inflate_children=inflate_children, **kwargs) for doi in datas_or_ids]
 
 		results = yield from asyncio.gather(*getters)
@@ -71,6 +173,12 @@ class TrelloObject(metaclass=abc.ABCMeta):
 
 	@asyncio.coroutine
 	def delete(self):
+		"""
+		A coroutine.
+
+		Deletes instance from Trello API and removes all data from self."""
+
+		# TODO: We have other attributes we need to delete.  For example, we change 'idBoard' to a board instance on self.board.
 		response = self.delete_from_api(self.id)
 		obj_cache.remove(self.id)
 		for k, v in self._raw_data:
@@ -78,19 +186,38 @@ class TrelloObject(metaclass=abc.ABCMeta):
 
 	@asyncio.coroutine
 	def save(self) -> None:
-		"""Saves changes to Trello api"""
+		"""
+		A coroutine.
+
+		Saves changes to Trello api"""
+
 		changes = self.get_api_from_state()
 		if changes:
 			new_data = yield from self.changes_to_api(changes)
-			self.state_from_api(new_data)
+			yield from self.state_from_api(new_data)
 
 	@asyncio.coroutine
-	def inflate(self):
+	def refresh(self):
+		"""
+		A coroutine.
+
+		Refreshes data from Trello.
+		"""
 		data = yield from self.get_data(self.id, self.tc)
 		yield from self.state_from_api(data)
 
 	@asyncio.coroutine
-	def state_from_api(self, api_data):
+	def state_from_api(self, api_data: dict, inflate_children: bool=True):
+		"""
+		Takes a dict, ``api_data``, and creates the state of this object using
+		the information contained within.
+
+		:param api_data: The data from the API.
+		:param inflate_children: If set to ``False``, we won't automatically
+			inflate related objects, like the :class:`.Board` related  to
+			a :class:`.Card`.  You will have to just rely on the
+			``idBoard`` attribute in that case.
+		"""
 		self._raw_data = api_data
 		for k, v in api_data.items():
 			if self.inflate_children:
@@ -101,37 +228,68 @@ class TrelloObject(metaclass=abc.ABCMeta):
 
 		self._refreshed_at = time.time()
 
-	@abc.abstractclassmethod
+	@classmethod
+	@abc.abstractmethod
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
-		"""Retrieves data from Trello for the provided id.
-		Implementers return a dict of data used to inflate the object."""
+		"""
+		Abstract classmethod that retrieves data from Trello for the provided id.
 
-	@abc.abstractclassmethod
+		Implementers return a dict of data used to inflate the object.
+
+		:param id_: The id of the object to retrieve.
+		:param tc: An instance of :class:`rosetrellis.trello_client.TrelloClient`.
+		:returns: A dict of data for the object.
+		"""
+
+	@classmethod
+	@abc.abstractmethod
 	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs) -> TrelloObjectCollection:
-		"""Retrieves all instances of this object."""
+		"""
+		Abstract classmthod that retrieves *all* instances of this object.
+
+		Implementers return a :class:`TrelloObjectCollection`.
+
+		:param tc: An instance of :class:`rosetrellis.trello_client.TrelloClient`.
+		"""
 
 	@abc.abstractmethod
 	def delete_from_api(self) -> None:
-		"""Deletes object from Trello API"""
+		"""
+		Abstract method that deletes this instance from the Trello API.
+		"""
 
 	@abc.abstractmethod
 	def changes_to_api(self, changes: dict) -> dict:
-		"""Sends data to Trello API"""
+		"""
+		Abstract method that sends data to Trello API.
+
+		:param changes: The changes to send.  The key:value pairs should match up with
+			the Trello API fields as detailed in the Trello API docs.
+		:returns: The new data to set on self.
+		"""
 
 	@abc.abstractmethod
 	def get_api_from_state(self) -> dict:
-		"""Returns how current state differs from original data."""
+		"""
+		Abstract method that returns how current state differs from original data.
+
+		:returns: The data that has changed since we built the object.
+		"""
 
 
 class Organization(TrelloObject):
+	"""
+	Trello organization representation.
+	"""
+
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient) -> dict:
+	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
 		return (yield from tc.get_organization(id_, fields="all"))
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
 		raise NotImplementedError
 
 	@asyncio.coroutine
@@ -143,6 +301,16 @@ class Organization(TrelloObject):
 		return (yield from self.tc.update_organization(self.id, changes))
 
 	def get_api_from_state(self):
+		"""
+		Return dict of changes between current state and data we were
+		instantiated with.
+
+		Special handling for:
+
+		1. Setting self.desc to None.
+		2. Validates that self.website was set to an address beginning with
+			'http' as required by Trello.
+		"""
 		changes = {}
 		if self.name != self.raw_data['name']:
 			changes['name'] = self.name
@@ -174,18 +342,25 @@ class Organization(TrelloObject):
 class Board(TrelloObject):
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
+	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
 		return (yield from tc.get_board(id_, fields="all"))
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
 		only_open = kwargs.get('only_open', True)
 		boards_data = yield from tc.get_boards(only_open=only_open)
-		return (yield from cls.get_many(boards_data, tc))
+		return (yield from cls.get_many(boards_data, tc, inflate_children=inflate_children))
 
 	@asyncio.coroutine
 	def delete_from_api(self):
+		"""
+		Boards can't be deleted!
+
+		Instead, try archiving by setting self.closed to True and saving.
+
+		:raises NotImplementedError:
+		"""
 		raise NotImplementedError("Trello does not permit deleting of boards.  Try `Board.close()`")
 
 	@asyncio.coroutine
@@ -202,7 +377,7 @@ class Board(TrelloObject):
 		if self.closed != self._raw_data['closed']:
 			changes['closed'] = self.closed
 		if self.organization.id != self._raw_data['idOrganization']:
-			changes['idOrgaizatio'] = self.organization.id
+			changes['idOrganization'] = self.organization.id
 
 		changes.update(self.prefs.get_api_from_state())
 
@@ -213,9 +388,14 @@ class Board(TrelloObject):
 		return (yield from Label.get_labels(self.id, self.tc))
 
 	@asyncio.coroutine
-	def get_lists(self) -> TrelloObjectCollection:
+	def get_lists(self, inflate_children=True) -> TrelloObjectCollection:
 		lists_data = yield from self.tc.get_board_lists(self.id)
-		return (yield from Lists.get_many(lists_data, self.tc))
+		return (yield from Lists.get_many(lists_data, self.tc, inflate_children=True))
+
+	@asyncio.coroutine
+	def get_cards(self, inflate_children=True) -> TrelloObjectCollection:
+		cards_data = yield from self.tc.get_board_cards(self.id)
+		return (yield from Card.get_many(cards_data, self.tc, inflate_children=inflate_children))
 
 	def __repr__(self):
 		if self._refreshed_at:
@@ -282,8 +462,8 @@ class Lists(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs) -> TrelloObjectCollection:
-		boards = yield from Board.get_all(tc)
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs) -> TrelloObjectCollection:
+		boards = yield from Board.get_all(tc, inflate_children=inflate_children)
 		lists_getters = [b.get_lists() for b in boards]
 		lists = list(itertools.chain.from_iterable((yield from asyncio.gather(*lists_getters))))
 		return TrelloObjectCollection(lists)
@@ -317,6 +497,10 @@ class Lists(TrelloObject):
 
 
 class Card(TrelloObject):
+	"""
+	Trello card representation.
+	"""
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient) -> dict:
@@ -324,8 +508,14 @@ class Card(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
-		raise NotImplementedError
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
+		boards = yield from Board.get_all(tc, inflate_children=inflate_children)
+		card_getters = [board.get_cards(inflate_children=inflate_children) for board in boards]
+		return TrelloObjectCollection(
+			itertools.chain.from_iterable(
+				(yield from asyncio.gather(*card_getters))
+			)
+		)
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -333,7 +523,8 @@ class Card(TrelloObject):
 
 	@asyncio.coroutine
 	def changes_to_api(self, changes: dict):
-		return (yield from self.tc.updatE_card(changes))
+		updated_api_data = yield from self.tc.update_card(self.id, changes)
+		return updated_api_data
 
 	def get_api_from_state(self):
 		changes = {}
@@ -344,16 +535,19 @@ class Card(TrelloObject):
 		if self.closed != self._raw_data['closed']:
 			changes['closed'] = self.closed
 
-		raw_data_colors = sorted([l['color'] for l in self._raw_data['colors']])
-		state_colors = sorted(self.label_colors)
+		if 'labels' in self._raw_data and self.label_colors:
+			raw_data_colors = sorted([label['color'] for label in self._raw_data['labels']])
+			state_colors = sorted(self.label_colors)
 
-		if raw_data_colors != state_colors:
-			changes['labels'] = ','.join(state_colors)
+			if raw_data_colors != state_colors:
+				changes['labels'] = ','.join(state_colors)
 
 		return changes
 
 	@asyncio.coroutine
-	def state_from_api(self, api_data):
+	def state_from_api(self, api_data, inflate_children=True):
+		"""sub"""
+
 		if 'labels' in api_data and self.inflate_children:
 			# Redundant info caused by using 'all' filter when getting
 			# card data
@@ -362,10 +556,13 @@ class Card(TrelloObject):
 			except KeyError:
 				pass
 
-		yield from super(Card, self).state_from_api(api_data)
+		yield from super(Card, self).state_from_api(api_data, inflate_children=inflate_children)
 
 	@property
-	def label_colors(self):
+	def label_colors(self) -> List:
+		"""
+		List of the label colors for this card.
+		"""
 		return [l.color for l in self.labels]
 
 	def __repr__(self):
@@ -383,7 +580,7 @@ class Checklist(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
 		raise NotImplementedError
 
 	@asyncio.coroutine
@@ -401,7 +598,6 @@ class Checklist(TrelloObject):
 		if self.pos != self._raw_data['pos']:
 			changes['pos'] = self.pos
 
-
 		if hasattr(self, 'card'):
 			# if object was created with inflate_children=False, then we won't have a card instance
 			curr_id = self.card.id
@@ -413,13 +609,13 @@ class Checklist(TrelloObject):
 		return changes
 
 	@asyncio.coroutine
-	def state_from_api(self, api_data):
+	def state_from_api(self, api_data, inflate_children=True):
 		if 'checkItems' in api_data and self.inflate_children:
 			self.check_items = yield from \
 				CheckItem.get_many(
 					api_data['checkItems'], self.tc, checklist_id=api_data['id'], card_id=api_data['idCard'])
 			del api_data['checkItems']
-		yield from super(Checklist, self).state_from_api(api_data)
+		yield from super(Checklist, self).state_from_api(api_data, inflate_children=inflate_children)
 
 	def __repr__(self):
 		if self._refreshed_at:
@@ -429,7 +625,8 @@ class Checklist(TrelloObject):
 
 
 class CheckItem(TrelloObject):
-	def __init__(self, id_: str, tc: trello_client.TrelloClient, checklist_id: str=None, card_id: str=None, **kwargs) -> None:
+	def __init__(self, id_: str, tc: trello_client.TrelloClient, checklist_id: str=None, card_id: str=None,
+	             **kwargs) -> None:
 		if not checklist_id:
 			raise ValueError("Must provide checklist id to CheckItem")
 		if not card_id:
@@ -447,7 +644,7 @@ class CheckItem(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
 		raise NotImplementedError
 
 	@asyncio.coroutine
@@ -503,7 +700,7 @@ class Label(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_all(cls, tc: trello_client.TrelloClient, *args, **kwargs):
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
 		raise NotImplementedError
 
 	@asyncio.coroutine

@@ -9,7 +9,7 @@ import time
 import aiohttp
 from typing import Any, Union, List, Sequence, Tuple
 
-import rose_trellis.util
+import rosetrellis.util
 
 
 __all__ = ('TrelloClient',)
@@ -241,6 +241,11 @@ class TrelloClientBoardMixin:
 		url = 'boards/{}/lists'.format(board_id)
 		return (yield from self.get(url))
 
+	@asyncio.coroutine
+	def get_board_cards(self, board_id) -> Sequence[str]:
+		url = 'boards/{}/cards'.format(board_id)
+		return (yield from self.get(url))
+
 
 class TrelloClientLabelMixin:
 	@asyncio.coroutine
@@ -326,13 +331,21 @@ class TrelloClient(TrelloClientCardMixin,
 		self._api_key = api_key if api_key else os.environ.get('TRELLO_API_KEY')
 		self._api_token = api_token if api_token else os.environ.get('TRELLO_API_TOKEN')
 
+		err_msg = ""
+		example = "\n>>> TrelloClient(api_key='your api key here', api_token='your api token here')\n"
 		if not self._api_key:
-			raise ValueError(
-				"Unable to get api key from environment variable TRELLO_API_KEY.  Either set envvar or provide it to this constructor.")
+			err_msg += "Unable to get api key from environment variable TRELLO_API_KEY.  Either set envvar or provide it to this constructor like so: {}".format(example)
 
 		if not self._api_token:
-			raise ValueError(
-				"Unable to get api token from environment variable TRELLO_API_TOKEN.  Either set envvar or provide it to this constructor.")
+			msg = "Unable to get api token from environment variable TRELLO_API_TOKEN.  Either set envvar or provide it to this constructor like so: {}".format(example)
+			if not err_msg:
+				err_msg = msg
+			else:
+				err_msg += "\n"
+				err_msg += msg
+
+		if err_msg:
+			raise ValueError(err_msg)
 
 		self._conx_sema = Semaphore(5)
 		self._cache = CachedUrlDict(expire_seconds=cache_for)
@@ -390,12 +403,12 @@ class TrelloClient(TrelloClientCardMixin,
 		params['token'] = self._api_token
 
 		with (yield from self._conx_sema):
-			r = yield from aiohttp.request(method, rose_trellis.util.join_url(url), params=params)
+			r = yield from aiohttp.request(method, rosetrellis.util.join_url(url), params=params)
 
 		retry_count = 0
 		while r.status == 429 and retry_count < 10:
 			with (yield from self._conx_sema):
-				r = yield from aiohttp.request(method, rose_trellis.util.join_url(url), params=params)
+				r = yield from aiohttp.request(method, rosetrellis.util.join_url(url), params=params)
 			if r.status == 429 and retry_count < 10:
 				logger.warning('Rate limited by Trello!')
 				asyncio.sleep(random.random() * 5)
