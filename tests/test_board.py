@@ -1,9 +1,9 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from rose_trellis import trello_client
-from rose_trellis.TrelloObjects import Board
-from rose_trellis.TrelloObjects.base import TrelloObjectCollection
+from rosetrellis import trello_client
+from rosetrellis.TrelloObjects import Board
+from rosetrellis.TrelloObjects.base import TrelloObjectCollection
 from tests import async_test, get_mock_coro
 
 

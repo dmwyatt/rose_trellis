@@ -1,5 +1,5 @@
 import unittest
-from rose_trellis.util import join_url
+from rosetrellis.util import join_url
 
 
 class TestUtil(unittest.TestCase):

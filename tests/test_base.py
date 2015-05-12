@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
-from rose_trellis import trello_client
-from rose_trellis.TrelloObjects.base import TrelloObject
+from rosetrellis import trello_client
+from rosetrellis.TrelloObjects.base import TrelloObject
 
 
 class TestTrelloObject(unittest.TestCase):
