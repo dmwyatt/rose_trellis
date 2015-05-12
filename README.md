@@ -9,8 +9,8 @@ Let's get a Board instance...
 ```python
 import asyncio
 
-from rose_trellis import trello_client
-from rose_trellis.models import Board
+from rosetrellis import trello_client
+from rosetrellis.models import Board
 
 board_id = 'you should put the id of a board here'
 event_loop = asyncio.get_event_loop()
@@ -27,7 +27,7 @@ board.desc = "This is the One True Board.  Bow before It."
 event_loop.run_until_complete(board.save())
 ```
 
-Since rose_trellis is built on `asyncio` we can get a bunch of instances in parallel:
+Since rosetrellis is built on `asyncio` we can get a bunch of instances in parallel:
 
 ```python
 board_ids = ["id_1", "id_2", "id_3", ...]
@@ -41,11 +41,11 @@ We've got a helper method for that.
 event_loop.run_until_complete(Board.get_many(board_ids, tc))
 ```
 
-If you're not going to use asyncio in your project, you can run all of our methods and 
+If you're not going to use `asyncio` in your project, you can run all of our methods and 
 functions with our helper function:
 
 ```python
-from rose_trellis.util import easy_run
+from rosetrellis.util import easy_run
 
 boards = easy_run(Board.get_many(board_ids, tc))
 ```
