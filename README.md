@@ -1,51 +1,37 @@
-Project under development.
+**Project under development.**
 
 
 Examples
--------
+--------
 
-Let's get a Board instance...
+We always need to first instantiate a TrelloClient which handles communicating with
+the Trello API and handles rate limiting and caching.
 
 ```python
-import asyncio
-
-from rosetrellis import trello_client
-from rosetrellis.models import Board
-
-board_id = 'you should put the id of a board here'
-event_loop = asyncio.get_event_loop()
+from rosetrellis.trello_client import TrelloClient
 tc = TrelloClient()
-
-board = event_loop.run_until_complete(Board.get(board_id, tc))
 ```
 
-Change some attributes of a board:
+Now get a Board:
+
+```python
+from rosetrellis.models import Board
+board = Board.get_s('some_board_id`, tc)
+```
+Few things to note about the code above:
+
+1. We always pass in the `TrelloClient` we've already instantiated to methods that communicate
+ with the Trello API.
+2. You have to provide the id of the Trello object you want.  This can be the 24-character
+ id, or the short id you see in various Trello urls.
+3. We used the synchronous version of `Board.get` called `Board.get_s`.  As rosetrellis is 
+ built on asyncio, and not everyone wants or needs to use coroutines in their own code,
+ we provide these synchronous versions of all of rosetrellis coroutines.
+
+Moving on, let's change some attributes of a board:
 
 ```python
 board.name = "I'm The Board"
 board.desc = "This is the One True Board.  Bow before It."
-event_loop.run_until_complete(board.save())
-```
-
-Since rosetrellis is built on `asyncio` we can get a bunch of instances in parallel:
-
-```python
-board_ids = ["id_1", "id_2", "id_3", ...]
-getters = [Board.get(board_id, tc) for board_id in board_ids]
-boards = event_loop.run_until_complete(asyncio.gather(*getters))
-```
-
-We've got a helper method for that.
-
-```python
-event_loop.run_until_complete(Board.get_many(board_ids, tc))
-```
-
-If you're not going to use `asyncio` in your project, you can run all of our methods and 
-functions with our helper function:
-
-```python
-from rosetrellis.util import easy_run
-
-boards = easy_run(Board.get_many(board_ids, tc))
+board.save_s()
 ```
