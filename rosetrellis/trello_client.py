@@ -24,21 +24,21 @@ class InvalidIdError(Exception):
 class CommFail(Exception):
 	pass
 
-def prepare_list_param(list_param: Union[Sequence[str], str]) -> Union[str, None]:
+def _prepare_list_param(list_param: Union[Sequence[str], str]) -> Union[str, None]:
 	if not list_param == "default":
 		if isinstance(list_param, str):
 			# pretty up a comma-separated list of strings
 			list_param = [s.strip() for s in list_param.split(',')]
 		return ','.join(list_param)
 
-def parse_batch(batch_resp: list) -> Tuple[Union[List[dict], List[tuple]]]:
+def _parse_batch(batch_resp: list) -> Tuple[Union[List[dict], List[tuple]]]:
 	good = []
 	bad = []
 
-	for card in batch_resp:
+	for obj in batch_resp:
 		# Not sure if this will always be valid.  Let's keep an eye on it.
-		assert len(card) == 1
-		for k, v in card.items():
+		assert len(obj) == 1
+		for k, v in obj.items():
 			if k == '200':
 				good.append(v)
 			else:
