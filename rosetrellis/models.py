@@ -18,6 +18,27 @@ from rosetrellis.util import Synchronizer
 logger = logging.getLogger(__name__)
 
 
+def get_class_for_data(data: dict):
+	for subclass in TrelloObject.__subclasses__():
+		if subclass.is_valid_data(data):
+			return subclass
+
+
+@asyncio.coroutine
+def get_obj_instance_for_data(data: dict, tc: trello_client.TrelloClient, inflate_children=True):
+	klass = get_class_for_data(data)
+	if not klass:
+		raise ValueError("Do not know how to handle provided data.")
+	logger.debug("Using class '{}' to inflate data".format(klass.__name__))
+	return (yield from klass.get(data, tc, inflate_children=inflate_children))
+
+
+def get_obj_instance_for_data_s(data: dict, tc: trello_client.TrelloClient, inflate_children=True):
+	return asyncio.get_event_loop().run_until_complete(
+		get_obj_instance_for_data(data, tc, inflate_children=inflate_children)
+	)
+
+
 class TrelloObjectCollection(list, Synchronizer):
 	"""
 	A list-like object that represents collections of objects inheriting from
@@ -55,6 +76,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	a partner synchronous method :meth:`~rosetrellis.models.TrelloObject.save_s`
 	that is generated at runtime by :class:`Synchronizer`.
 	"""
+	API_FIELDS = ()
 
 	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs) -> None:
 		"""
@@ -67,6 +89,9 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			:class:`.Card`.  You will have to just rely on the ``idBoard``
 			attribute in that case.
 		"""
+		if not self.API_FIELDS:
+			raise NotImplementedError("Subclasses of TrelloObject must provide the API_FIELDS attribute.")
+
 		self.tc = tc
 		self.id = id_
 		self._refreshed_at = 0
@@ -122,14 +147,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		obj = obj_cache.get(id_)
 
-		if not obj and not data:
+		if obj is None and not data:
 			logger.debug("No cached object and no provided data, requesting data from TrelloClient.")
 			resp = yield from cls.get_data(id_, tc, **kwargs)
 			obj = cls(resp['id'], tc, inflate_children=inflate_children, **kwargs)
 			obj_cache.set(obj)
 			yield from obj.state_from_api(resp, inflate_children=inflate_children)
 
-		elif not obj and data:
+		elif obj is None and data:
 			logger.debug("No cached object.  Building object from provided data.")
 			obj = cls(data['id'], tc, inflate_children=inflate_children, **kwargs)
 			obj_cache.set(obj)
@@ -276,11 +301,25 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		:returns: The data that has changed since we built the object.
 		"""
 
+	@classmethod
+	def is_valid_data(self, data: dict) -> bool:
+		"""
+		Determines whether the provided dict is valid data for this object.
+
+		:returns: A bool indicating whether this is valid dat.
+		"""
+
+		return all([key in self.API_FIELDS for key in data])
+
 
 class Organization(TrelloObject):
 	"""
 	Trello organization representation.
 	"""
+	API_FIELDS = ('billableMemberCount', 'desc', 'descData', 'displayName', 'id',
+	              'idBoards', 'invitations', 'invited', 'logoHash', 'memberships',
+	              'name', 'powerUps', 'prefs', 'premiumFeatures', 'products', 'url',
+	              'website')
 
 	@classmethod
 	@asyncio.coroutine
@@ -340,6 +379,11 @@ class Organization(TrelloObject):
 
 
 class Board(TrelloObject):
+	API_FIELDS = ('closed', 'dateLastActivity', 'dateLastView', 'desc', 'descData',
+	              'id', 'idOrganization', 'invitations', 'invited', 'labelNames',
+	              'memberships', 'name', 'pinned', 'powerUps', 'prefs', 'shortLink',
+	              'shortUrl', 'starred', 'subscribed', 'url')
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
@@ -367,7 +411,6 @@ class Board(TrelloObject):
 	def changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_board(self.id, changes))
 
-	@asyncio.coroutine
 	def get_api_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
@@ -455,6 +498,8 @@ class BoardPrefs:
 
 
 class Lists(TrelloObject):
+	API_FIELDS = ['closed', 'id', 'idBoard', 'name', 'pos', 'subscribed']
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
@@ -500,6 +545,11 @@ class Card(TrelloObject):
 	"""
 	Trello card representation.
 	"""
+	API_FIELDS = ('badges', 'checkItemStates', 'closed', 'dateLastActivity', 'desc',
+	              'descData', 'due', 'email', 'id', 'idAttachmentCover', 'idBoard',
+	              'idChecklists', 'idLabels', 'idList', 'idMembers', 'idMembersVoted',
+	              'idShort', 'labels', 'manualCoverAttachment', 'name', 'pos',
+	              'shortLink', 'shortUrl', 'subscribed', 'url')
 
 	@classmethod
 	@asyncio.coroutine
@@ -573,6 +623,8 @@ class Card(TrelloObject):
 
 
 class Checklist(TrelloObject):
+	API_FIELDS = ('cards', 'checkItems', 'id', 'idBoard', 'idCard', 'name', 'pos')
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
@@ -611,10 +663,15 @@ class Checklist(TrelloObject):
 	@asyncio.coroutine
 	def state_from_api(self, api_data, inflate_children=True):
 		if 'checkItems' in api_data and self.inflate_children:
-			self.check_items = yield from \
-				CheckItem.get_many(
-					api_data['checkItems'], self.tc, checklist_id=api_data['id'], card_id=api_data['idCard'])
+			self.check_items = yield from CheckItem.get_many(
+				api_data['checkItems'],
+				self.tc,
+				checklist_id=api_data['id'],
+				card_id=api_data['idCard']
+			)
+
 			del api_data['checkItems']
+
 		yield from super(Checklist, self).state_from_api(api_data, inflate_children=inflate_children)
 
 	def __repr__(self):
@@ -625,6 +682,8 @@ class Checklist(TrelloObject):
 
 
 class CheckItem(TrelloObject):
+	API_FIELDS = ('id', 'name', 'nameData', 'pos', 'state')
+
 	def __init__(self, id_: str, tc: trello_client.TrelloClient, checklist_id: str=None, card_id: str=None,
 	             **kwargs) -> None:
 		if not checklist_id:
@@ -693,6 +752,8 @@ class CheckItem(TrelloObject):
 
 
 class Label(TrelloObject):
+	API_FIELDS = ('color', 'id', 'idBoard', 'name', 'uses')
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
