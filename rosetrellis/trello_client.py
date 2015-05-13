@@ -191,6 +191,8 @@ class TrelloClientChecklistMixin:
 		return (yield from self.put(url, params=changes))
 
 
+
+
 class TrelloClientCheckItemMixin:
 	@asyncio.coroutine
 	def get_checkitem(self, checklist_id: str, checkitem_id: str) -> dict:
@@ -250,6 +252,11 @@ class TrelloClientBoardMixin:
 	@asyncio.coroutine
 	def get_board_cards(self, board_id) -> Sequence[str]:
 		url = 'boards/{}/cards'.format(board_id)
+		return (yield from self.get(url))
+
+	@asyncio.coroutine
+	def get_board_checklists(self, board_id) -> Sequence[dict]:
+		url = 'boards/{}/checklists'.format(board_id)
 		return (yield from self.get(url))
 
 

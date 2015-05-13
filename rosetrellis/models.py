@@ -440,6 +440,11 @@ class Board(TrelloObject):
 		cards_data = yield from self.tc.get_board_cards(self.id)
 		return (yield from Card.get_many(cards_data, self.tc, inflate_children=inflate_children))
 
+	@asyncio.coroutine
+	def get_checklists(self, inflate_children=True) -> TrelloObjectCollection:
+		checklists_data = yield from self.tc.get_board_checklists(self.id)
+		return (yield from Checklist.get_many(checklists_data, self.tc, inflate_children=inflate_children))
+
 	def __repr__(self):
 		if self._refreshed_at:
 			return "<Board: name='{}', id='{}')>".format(self.name, self.id)
@@ -633,7 +638,13 @@ class Checklist(TrelloObject):
 	@classmethod
 	@asyncio.coroutine
 	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
-		raise NotImplementedError
+		boards = yield from Board.get_all(tc)
+		getters = [board.get_checklists() for board in boards]
+
+		checklists = list(itertools.chain.from_iterable((yield from asyncio.gather(*getters))))
+
+		return checklists
+
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -659,6 +670,12 @@ class Checklist(TrelloObject):
 			changes['idCard'] = curr_id
 
 		return changes
+
+	@property
+	def incomplete_items(self):
+		if not hasattr(self, 'check_tiems'):
+			return None
+		return [ci for ci in self.check_items if ci.complete]
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data, inflate_children=True):
