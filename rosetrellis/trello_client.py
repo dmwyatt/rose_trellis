@@ -114,14 +114,17 @@ class TrelloClientCardMixin:
 		url = 'cards'
 		return (yield from self.post(url, params))
 
+	def get_card_url(self, card_id: str) -> str:
+		return 'cards/{}'.format(card_id)
+
 	@asyncio.coroutine
 	def get_card(self, card_id, case_insensitive: bool=True, fields: Union[Sequence[str], str]="default") -> dict:
-		url = 'cards/{}'.format(card_id)
+		url = self.get_card_url(card_id)
 		if not fields:
 			return (yield from self.get(url))
 		else:
 			params = {}
-			fields = prepare_list_param(fields)
+			fields = _prepare_list_param(fields)
 			if fields:
 				params['fields'] = fields
 			return (yield from self.get(url, params=params))
@@ -211,9 +214,12 @@ class TrelloClientCheckItemMixin:
 
 
 class TrelloClientBoardMixin:
+	def get_board_url(self, board_id: str) -> str:
+		return 'boards/{}'.format(board_id)
+
 	@asyncio.coroutine
 	def get_board(self, board_id: str, fields: Union[Sequence[str], str]="default") -> dict:
-		url = 'boards/{}'.format(board_id)
+		url = self.get_board_url(board_id)
 		if not fields:
 			return (yield from self.get(url))
 		else:
