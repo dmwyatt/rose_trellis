@@ -78,7 +78,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	"""
 	API_FIELDS = ()
 
-	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs) -> None:
+	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
 		"""
 		:param id_: A full 24-character Trello object id or the shortLink you see
 			in Trello urls.
@@ -96,7 +96,6 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		self.id = id_
 		self._refreshed_at = 0
 		self.opts = kwargs
-		self.inflate_children = inflate_children
 
 	@classmethod
 	@asyncio.coroutine
@@ -603,7 +602,7 @@ class Card(TrelloObject):
 	def state_from_api(self, api_data, inflate_children=True):
 		"""sub"""
 
-		if 'labels' in api_data and self.inflate_children:
+		if 'labels' in api_data and inflate_children:
 			# Redundant info caused by using 'all' filter when getting
 			# card data
 			try:
@@ -679,7 +678,7 @@ class Checklist(TrelloObject):
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data, inflate_children=True):
-		if 'checkItems' in api_data and self.inflate_children:
+		if 'checkItems' in api_data and inflate_children:
 			self.check_items = yield from CheckItem.get_many(
 				api_data['checkItems'],
 				self.tc,
