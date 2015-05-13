@@ -222,14 +222,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			yield from self.state_from_api(new_data)
 
 	@asyncio.coroutine
-	def refresh(self):
+	def refresh(self, inflate_children=True):
 		"""
 		A coroutine.
 
 		Refreshes data from Trello.
 		"""
 		data = yield from self.get_data(self.id, self.tc)
-		yield from self.state_from_api(data)
+		yield from self.state_from_api(data, inflate_children=inflate_children)
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data: dict, inflate_children: bool=True):
@@ -245,7 +245,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		"""
 		self._raw_data = api_data
 		for k, v in api_data.items():
-			if self.inflate_children:
+			if inflate_children:
 				field_name, inflated = yield from _api_field_to_obj_field(k, v, self.tc)
 				setattr(self, field_name, inflated)
 			else:
