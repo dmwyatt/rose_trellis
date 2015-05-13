@@ -672,7 +672,7 @@ class Checklist(TrelloObject):
 
 	@property
 	def incomplete_items(self):
-		if not hasattr(self, 'check_tiems'):
+		if not hasattr(self, 'check_items'):
 			return None
 		return [ci for ci in self.check_items if ci.complete]
 
