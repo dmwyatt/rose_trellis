@@ -82,8 +82,8 @@ class CachedUrlDict(dict):
 	def _is_expired(self, value: tuple) -> bool:
 		return time.time() - value[0] > self.expire_seconds
 
-	def _getitem__(self, key: CachedUrl) -> Union[None, list, dict]:
-		value = super(CachedUrlDict, self)._getitem__(key)
+	def __getitem__(self, key: CachedUrl) -> Union[None, list, dict]:
+		value = super(CachedUrlDict, self).__getitem__(key)
 
 		if self._is_expired(value):
 			del self[key]
@@ -130,7 +130,7 @@ class TrelloClientCardMixin:
 	def get_cards(self, cards: List[str]) -> Tuple[Union[List[dict], List[tuple]]]:
 		urls = ['/cards/{}'.format(cid) for cid in cards]
 		cards = yield from self.batch_get(urls)
-		return parse_batch(cards)
+		return _parse_batch(cards)
 
 	@asyncio.coroutine
 	def get_cards_for_board(self, board_id: str) -> List[dict]:
@@ -218,7 +218,7 @@ class TrelloClientBoardMixin:
 			return (yield from self.get(url))
 		else:
 			params = {}
-			fields = prepare_list_param(fields)
+			fields = _prepare_list_param(fields)
 			if fields:
 				params['fields'] = fields
 			return (yield from self.get(url, params=params))
@@ -274,7 +274,7 @@ class TrelloClientOrgMixin:
 	def get_organization(self, org_id: str, fields: Union[Sequence[str], str]="default") -> dict:
 		url = 'organization/{}'.format(org_id)
 		params = {}
-		fields = prepare_list_param(fields)
+		fields = _prepare_list_param(fields)
 		if fields:
 			params['fields'] = fields
 		return (yield from self.get(url, params=params))
@@ -294,7 +294,7 @@ class TrelloClientListsMixin:
 	def get_list(self, list_id: str, fields: Union[Sequence[str], str]="default") -> dict:
 		url = 'lists/{}'.format(list_id)
 		params = {}
-		fields = prepare_list_param(fields)
+		fields = _prepare_list_param(fields)
 		if fields:
 			params['fields'] = fields
 		return (yield from self.get(url, params=params))
@@ -429,5 +429,5 @@ class TrelloClient(TrelloClientCardMixin,
 	@asyncio.coroutine
 	def batch_get(self, routes: List[Union[Sequence[str], str]]):
 		url = 'batch'
-		params = {'urls': prepare_list_param(routes)}
+		params = {'urls': _prepare_list_param(routes)}
 		return (yield from self.get(url, params=params))
