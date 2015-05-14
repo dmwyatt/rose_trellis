@@ -8,7 +8,7 @@ import time
 import itertools
 
 from dateutil import parser
-from typing import Any, Tuple, List, Union
+from typing import Any, List, Union
 
 import rosetrellis.base.obj_cache as obj_cache
 import rosetrellis.trello_client as trello_client
@@ -76,7 +76,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	a partner synchronous method :meth:`~rosetrellis.models.TrelloObject.save_s`
 	that is generated at runtime by :class:`Synchronizer`.
 	"""
+
 	API_FIELDS = ()
+	"""A simple list of all fields this object should receive from the api"""
+
+	INFLATORS = {}
+	""" A description of how to build all the related objects
+		See other classes like :class:`~.Card` to see some examples
+	"""
 
 	def __init__(self, id_: str, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
 		"""
@@ -89,13 +96,25 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			:class:`.Card`.  You will have to just rely on the ``idBoard``
 			attribute in that case.
 		"""
+		em = "Subclasses of TrelloObject must provide the {} attribute"
 		if not self.API_FIELDS:
-			raise NotImplementedError("Subclasses of TrelloObject must provide the API_FIELDS attribute.")
+			raise ValueError(em.format('API_FIELDS'))
 
 		self.tc = tc
 		self.id = id_
 		self._refreshed_at = 0
 		self.opts = kwargs
+
+		# Create inflator definitions
+		# used by self.state_from_api to convert object references to actual objects
+		self.BOARD_INFLATE = {'dest_field': 'board', 'inflator': Board.get}
+		self.BOARDS_INFLATE = {'dest_field': 'boards', 'inflator': Board.get_many}
+		self.CARD_INFLATE = {'dest_field': 'card', 'inflator': Card.get}
+		self.CHECKLISTS_INFLATE = {'dest_field': 'checklists', 'inflator': Checklist.get_many}
+		self.LABELS_INFLATE = {'dest_field': 'labels', 'inflator': Label.get_many}
+		self.LIST_INFLATE = {'dest_field': 'list', 'inflator': Lists.get}
+		self.ORGANIZATION_INFLATE = {'dest_field': 'organization', 'inflator': Organization.get}
+		self.BOARD_PREFS = {'dest_field': 'prefs', 'inflator': handle_prefs}
 
 	@classmethod
 	@asyncio.coroutine
@@ -140,6 +159,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			id_ = data_or_id['id']
 			data = data_or_id
 		elif 'id' not in data_or_id:
+			print(data_or_id)
 			raise ValueError("Must provide a mapping with an 'id' key.")
 		else:
 			raise TypeError("Must provide either a str id or a dict of object data")
@@ -243,14 +263,37 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			``idBoard`` attribute in that case.
 		"""
 		self._raw_data = api_data
+		inflators = []
 		for k, v in api_data.items():
-			if inflate_children:
-				field_name, inflated = yield from _api_field_to_obj_field(k, v, self.tc)
-				setattr(self, field_name, inflated)
-			else:
-				setattr(self, k, v)
+			if inflate_children and k in self.INFLATORS:
+				inflator_attr = self.INFLATORS[k]
+				inflator_definition = getattr(self, inflator_attr, None)
+				if not inflator_definition:
+					raise ValueError('"{}" is an invalid inflator'.format(inflator_attr))
+
+				dest_field = inflator_definition['dest_field']
+				inflator = inflator_definition['inflator']
+				inflators.append(self._inflator(dest_field, v, inflator))
+
+			if 'date' in k and v:
+				# parse date fields into datetime objects
+				parsed = None
+				try:
+					v = parser.parse(v)
+				except ValueError:
+					pass
+
+			setattr(self, k, v)
+
+		if inflators:
+			yield from asyncio.wait(inflators)
 
 		self._refreshed_at = time.time()
+
+	@asyncio.coroutine
+	def _inflator(self, dest_field, orig_value, inflator):
+		new_value = yield from inflator(orig_value, self.tc)
+		setattr(self, dest_field, new_value)
 
 	@classmethod
 	@abc.abstractmethod
@@ -310,6 +353,18 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		return all([key in self.API_FIELDS for key in data])
 
+	def is_inflated(self) -> bool:
+		return all([hasattr(self, f) for f in self.get_inflated_fields()])
+
+	def get_inflated_fields(self) -> List[str]:
+		fields = []
+		for k, v in self.INFLATORS.items():
+			inflator_definition = getattr(self, v, None)
+			if not inflator_definition:
+				continue
+			fields.append(inflator_definition['dest_field'])
+		return fields
+
 
 class Organization(TrelloObject):
 	"""
@@ -319,6 +374,10 @@ class Organization(TrelloObject):
 	              'idBoards', 'invitations', 'invited', 'logoHash', 'memberships',
 	              'name', 'powerUps', 'prefs', 'premiumFeatures', 'products', 'url',
 	              'website')
+
+	INFLATORS = {
+		'idBoards': 'BOARDS_INFLATE'
+	}
 
 	@classmethod
 	@asyncio.coroutine
@@ -382,6 +441,11 @@ class Board(TrelloObject):
 	              'id', 'idOrganization', 'invitations', 'invited', 'labelNames',
 	              'memberships', 'name', 'pinned', 'powerUps', 'prefs', 'shortLink',
 	              'shortUrl', 'starred', 'subscribed', 'url')
+
+	INFLATORS = {
+		'idOrganization': 'ORGANIZATION_INFLATE',
+		'prefs': 'BOARD_PREFS'
+	}
 
 	@classmethod
 	@asyncio.coroutine
@@ -502,7 +566,11 @@ class BoardPrefs:
 
 
 class Lists(TrelloObject):
-	API_FIELDS = ['closed', 'id', 'idBoard', 'name', 'pos', 'subscribed']
+	API_FIELDS = ('closed', 'id', 'idBoard', 'name', 'pos', 'subscribed')
+
+	INFLATORS = {
+		'idBoard': 'BOARD_INFLATE'
+	}
 
 	@classmethod
 	@asyncio.coroutine
@@ -554,6 +622,13 @@ class Card(TrelloObject):
 	              'idChecklists', 'idLabels', 'idList', 'idMembers', 'idMembersVoted',
 	              'idShort', 'labels', 'manualCoverAttachment', 'name', 'pos',
 	              'shortLink', 'shortUrl', 'subscribed', 'url')
+	INFLATORS = {
+		'idBoard': 'BOARD_INFLATE',
+		'idChecklists': 'CHECKLISTS_INFLATE',
+		'idLabels': 'LABELS_INFLATE',
+		'idList': 'LIST_INFLATE',
+		# 'idMembers': {'dest_field': 'members', 'inflator': Member.get_many}
+	}
 
 	@classmethod
 	@asyncio.coroutine
@@ -629,6 +704,11 @@ class Card(TrelloObject):
 class Checklist(TrelloObject):
 	API_FIELDS = ('cards', 'checkItems', 'id', 'idBoard', 'idCard', 'name', 'pos')
 
+	INFLATORS = {
+		'idBoard': 'BOARD_INFLATE',
+		'idCard': 'CARD_INFLATE'
+	}
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
@@ -643,7 +723,6 @@ class Checklist(TrelloObject):
 		checklists = list(itertools.chain.from_iterable((yield from asyncio.gather(*getters))))
 
 		return checklists
-
 
 	@asyncio.coroutine
 	def delete_from_api(self):
@@ -681,7 +760,6 @@ class Checklist(TrelloObject):
 		if not hasattr(self, 'check_items'):
 			return None
 		return [ci for ci in self.check_items if ci.complete]
-
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data, inflate_children=True):
@@ -777,6 +855,10 @@ class CheckItem(TrelloObject):
 class Label(TrelloObject):
 	API_FIELDS = ('color', 'id', 'idBoard', 'name', 'uses')
 
+	INFLATORS = {
+		'idBoard': 'BOARD_INFLATE'
+	}
+
 	@classmethod
 	@asyncio.coroutine
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
@@ -832,61 +914,3 @@ def handle_prefs(prefs: dict, tc: trello_client.TrelloClient) -> BoardPrefs:
 	except ValueError:
 		# TODO: handle organization prefs
 		return prefs
-
-# TODO: 'memberships', 'invitations', 'idMembers', 'idList'
-api_fields_mapping = (
-	('idOrganization', 'organization', Organization.get),
-	('idBoard', 'board', Board.get),
-	('idBoards', 'boards', Board.get_many),
-	('idLabels', 'labels', Label.get_many),
-	('prefs', 'prefs', handle_prefs),
-	('labels', 'labels', Label.get_many),
-	('idChecklist', 'checklist', Checklist.get),
-	('idChecklists', 'checklists', Checklist.get_many),
-	('idCard', 'card', Card.get),
-	('idList', 'list', Lists.get)
-)
-
-
-@asyncio.coroutine
-def _api_field_to_obj_field(key: str, value: Any, tc: trello_client.TrelloClient) -> Tuple[str, Any]:
-	"""
-
-	:param key: the key from the Trello API
-	:param value: the value from the Trello API
-	:param tc: our TrelloClient
-	:raise ValueError:
-	"""
-
-	# handle empty values
-	if value is None:
-		return key, value
-
-	found = False
-	for api_field_name, obj_field_name, api_to_obj_map in api_fields_mapping:
-		if api_field_name == key:
-			found = True
-			break
-
-	if not found:
-		# handle some generic cases
-		if 'date' in key and value:
-			# parse date fields into datetime objects
-			parsed = None
-			try:
-				parsed = parser.parse(value)
-			except ValueError:
-				pass
-			if parsed:
-				return key, parsed
-
-		# This is our fall-through case.  We have no way to process this key/value mapping
-		# so just use them as-is
-		return key, value
-
-	if callable(api_to_obj_map):
-		return obj_field_name, (yield from api_to_obj_map(value, tc))
-
-	# We have a mapping for this key, but we don't know how to handle the specified mapper
-	raise ValueError(
-		"Do not know how to map '{}' to '{}' with '{}'".format(api_field_name, obj_field_name, api_to_obj_map))
