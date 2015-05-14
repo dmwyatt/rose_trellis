@@ -674,7 +674,14 @@ class Checklist(TrelloObject):
 	def incomplete_items(self):
 		if not hasattr(self, 'check_items'):
 			return None
+		return [ci for ci in self.check_items if not ci.complete]
+
+	@property
+	def complete_items(self):
+		if not hasattr(self, 'check_items'):
+			return None
 		return [ci for ci in self.check_items if ci.complete]
+
 
 	@asyncio.coroutine
 	def state_from_api(self, api_data, inflate_children=True):
