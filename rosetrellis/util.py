@@ -70,3 +70,6 @@ class _Synchronizer(abc.ABCMeta):
 
 class Synchronizer(metaclass=_Synchronizer):
 	pass
+
+def is_valid_website(website: str) -> bool:
+		return website.startswith('http://') or website.startswith('https://')
