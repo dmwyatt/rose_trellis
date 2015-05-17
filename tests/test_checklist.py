@@ -136,20 +136,20 @@ class TestChecklist(unittest.TestCase):
 		cl = Checklist(self.tc, obj_data=checklist_data)
 
 		# Test that we don't have any changes right after instantiation of obj
-		self.assertFalse(cl.get_api_from_state())
+		self.assertFalse(cl.get_api_update_from_state())
 
 		new_card_id = 'new_card_id'
 		new_card = Card(self.tc, obj_id=new_card_id)
 		cl.card = new_card
 
 		# Test that we provide the right api data for a changed card
-		self.assertEqual(cl.get_api_from_state().get('idCard'), new_card_id)
+		self.assertEqual(cl.get_api_update_from_state().get('idCard'), new_card_id)
 
 	def test_change_misc(self):
 		cl = Checklist(self.tc, obj_data=checklist_data)
 
 		# Test that we don't have any changes right after instantiation of obj
-		self.assertFalse(cl.get_api_from_state())
+		self.assertFalse(cl.get_api_update_from_state())
 
 		new_name = 'new name'
 		cl.name = new_name
@@ -158,8 +158,8 @@ class TestChecklist(unittest.TestCase):
 		cl.pos = new_pos
 
 		# test that we provide the right api data for a changed name and position
-		self.assertEqual(cl.get_api_from_state().get('name'), new_name)
-		self.assertEqual(cl.get_api_from_state().get('pos'), new_pos)
+		self.assertEqual(cl.get_api_update_from_state().get('name'), new_name)
+		self.assertEqual(cl.get_api_update_from_state().get('pos'), new_pos)
 
 
 
