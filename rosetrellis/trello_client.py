@@ -219,6 +219,7 @@ class TrelloClientBoardMixin:
 	def get_board_url(self, board_id: str) -> str:
 		return 'boards/{}'.format(board_id)
 
+
 	@asyncio.coroutine
 	def get_board(self, board_id: str, fields: Union[Sequence[str], str]="default") -> dict:
 		url = self.get_board_url(board_id)
@@ -285,7 +286,7 @@ class TrelloClientLabelMixin:
 class TrelloClientOrgMixin:
 	@asyncio.coroutine
 	def get_organization(self, org_id: str, fields: Union[Sequence[str], str]="default") -> dict:
-		url = 'organization/{}'.format(org_id)
+		url = 'organizations/{}'.format(org_id)
 		params = {}
 		fields = _prepare_list_param(fields)
 		if fields:
@@ -301,6 +302,22 @@ class TrelloClientOrgMixin:
 	def update_organization(self, org_id: str, params: dict) -> dict:
 		url = 'organization/{}'.format(org_id)
 		return (yield from self.put(url, params=params))
+
+	@asyncio.coroutine
+	def create_organization(self, displayName: str, name: str="", desc: str="", website: str="") -> dict:
+		url = 'organizations'
+		params = {}
+		if name:
+			params["name"] = name
+		if displayName:
+			params["displayName"] = displayName
+		if desc:
+			params["desc"] = desc
+		if website:
+			params["website"] = website
+
+		return (yield from self.post(url, params=params))
+
 
 class TrelloClientListsMixin:
 	@asyncio.coroutine
