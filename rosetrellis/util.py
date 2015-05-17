@@ -2,7 +2,7 @@ import abc
 from urllib.parse import urljoin
 import asyncio
 
-from typing import Any
+from typing import Any, Callable, Sequence, List
 
 
 TRELLO_URL_BASE = 'https://api.trello.com/1/'
@@ -24,9 +24,26 @@ def join_url(part: str) -> str:
 	return newpath
 
 
-def easy_run(gen) -> Any:
-	el = asyncio.get_event_loop()
-	return el.run_until_complete(gen)
+def make_sequence_attrgetter(attr_name: str) -> Callable[Sequence[object]]:
+	"""
+	Get a callable which takes a sequence of objects and returns a list of
+	``attr_name`` from each object in the sequence.
+
+	:param attr_name: The name of the attribute to get from objects provided the the
+		returned callable.
+	:return: A callable which returns a list of attributes specified by ``attr_name``.
+	"""
+
+	def sequence_attrgetter(seq: Sequence[object]) -> List[object]:
+		"""
+		Returns a list of attributes from the provided sequence of objects.
+
+		:param seq: The sequence to query.
+		:return: List of attribute values.
+		"""
+		return [getattr(obj, attr_name, None) for obj in seq]
+
+	return sequence_attrgetter
 
 
 class _Synchronizer(abc.ABCMeta):
