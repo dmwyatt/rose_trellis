@@ -445,7 +445,17 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		:returns: The data that is needed to POST to API.
 		"""
 
-	def _get_create_dict(self, fields: List[str]) -> dict:
+	def _stripped_dict_from_fields(self, fields: List[str]) -> dict:
+		"""
+		Returns a dict of the values contained in the attributes specified in
+		``fields``.
+		
+		If the value does not exist or is None, then we don't create an entry 
+		for it.
+		
+		:param fields: 
+		:return: A dict mapping fields to values taken from self.
+		"""
 		create_dict = {}
 		for f in fields:
 			value = getattr(self, f, None)
@@ -770,7 +780,7 @@ class Board(TrelloObject):
 			raise ValueError("Must have Board.name to create a Board")
 
 		# TODO: Handle prefs
-		return self._get_create_dict(['name', 'desc', 'idOrganization', 'powerups'])
+		return self._stripped_dict_from_fields(['name', 'desc', 'idOrganization', 'powerups'])
 
 	@asyncio.coroutine
 	def get_labels(self):
