@@ -599,17 +599,6 @@ class Organization(TrelloObject):
 	API_MANY_KEY = 'idOrganizations'
 	STATE_MANY_ATTR = 'organizations'
 
-	def __init__(self, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
-		super().__init__(tc, *args, **kwargs)
-
-		self.name = kwargs.get('name', '')
-		self.displayName = kwargs.get('displayName', '')
-		self.desc = kwargs.get('desc', '')
-		self.website = kwargs.get('website')
-
-		if self.website and not is_valid_website(self.website):
-			raise ValueError('website must start with "http://" or "https://"')
-
 	def _get_additional_transformers(self):
 		return (Board._get_transformer_for_many(),)
 
@@ -661,7 +650,8 @@ class Organization(TrelloObject):
 		if new_ws != self._raw_data['website']:
 			if new_ws:
 				if not is_valid_website(new_ws):
-					raise ValueError('Organization.website must start with "http://" or "https://')
+					raise ValueError('Organization.website must start with '
+					                 '"http://" or "https://')
 			else:
 				changes['website'] = new_ws
 
@@ -698,26 +688,6 @@ class Board(TrelloObject):
 	def _get_additional_transformers(self):
 		return (Organization._get_transformer_for_single(),)
 
-	def __init__(self, tc, *args, **kwargs):
-		super().__init__(tc, *args, **kwargs)
-		# TODO: Support idBoardSource and keepFromSource
-
-		self.name = kwargs.get('name', '')
-		self.desc = kwargs.get('desc', '')
-
-		self.organization = kwargs.get('organization', None)
-		self.idOrganization = kwargs.get('idOrganization', None)
-		if not self.idOrganization and self.organization:
-			self.idOrganization = id_getter(self.organization)
-
-		self.boards = kwargs.get('boards', [])
-		self.idBoards = kwargs.get('idBoards', [])
-		if not self.idBoards and self.boards:
-			self.idBoards = ids_getter(self.boards)
-
-		self.powerUps = kwargs.get('powerUps', '')
-		self.prefs = kwargs.get('prefs', None)
-
 	@classmethod
 	@asyncio.coroutine
 	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
@@ -737,7 +707,7 @@ class Board(TrelloObject):
 
 		Instead, try archiving by setting self.closed to True and saving.
 
-		:raises NotImplementedError:
+		:raises NotImplementedError: Because it's not possible to delete boards.
 		"""
 		raise NotImplementedError("Trello does not permit deleting of boards.  Try `Board.close()`")
 
