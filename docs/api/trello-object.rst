@@ -15,7 +15,6 @@ The following classes all inherit from :class:`.TrelloObject`:
   checkitem
   label
 
-
 .. autoclass:: rosetrellis.models.TrelloObject
    :members:
    :show-inheritance:
@@ -23,3 +22,6 @@ The following classes all inherit from :class:`.TrelloObject`:
 .. autoclass:: rosetrellis.models.TrelloObjectCollection
    :members:
    :show-inheritance:
+
+.. autoclass:: rosetrellis.models.StateTransformer
+   :members:

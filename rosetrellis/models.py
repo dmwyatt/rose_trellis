@@ -3,16 +3,15 @@ Contains models for the various objects we get from Trello.
 """
 import abc
 import asyncio
-from collections import namedtuple
 import logging
 import operator
 import time
 import itertools
 import datetime
+import re
 
 from dateutil import parser
-import re
-from typing import Any, List, Union, Sequence
+from typing import Any, List, Union, Sequence, Callable
 
 import rosetrellis.base.obj_cache as obj_cache
 import rosetrellis.trello_client as trello_client
@@ -23,32 +22,47 @@ logger = logging.getLogger(__name__)
 
 id_getter = operator.attrgetter('id')
 ids_getter = make_sequence_attrgetter('id')
-StateTransformer = namedtuple('StateTransformer',
-	                              ['api_name',
-	                               'state_name',
-	                               'api_transformer',
-	                               'state_transformer'])
-"""
-Describes how to change the value to and from object state to API.
 
-:attr:`StateTransformer.api_transformer` and :attr:`StateTransformer.state_transformer`
-are callables that transform values to and from object state to API.
 
-There are three possible types of transformer:
+class StateTransformer:
+	"""
+	Describes how to change the value to and from object state to API.
 
-	1. You can provide a callable.
-	2. You can provide ``None`` for no transformation.
-	3. You can provide a string name of a callable on self which is retrieved
-		from self similarly to:
+	Used by TrelloObjects to transform API values to TrelloObject values and
+	vice-versa.
+	"""
 
->>> ast = StateTransformer('idBoard', 'board', 'BOARD_INFLATE', operator.attrgetter('id'))
->>> call_me = getattr(self, ast.transformer)
->>> assert callable(call_me)
+	def __init__(self,
+	             api_name: str,
+	             state_name: str,
+	             api_transformer: Union[Callable[Any], str]=None,
+	             state_transformer: Union[Callable[Any], str]=None) -> None:
+		"""
+		There are three possible types of transformer:
 
-This third type of transformer is provided to enable you to use callables that
-are undefined at the time the python interpreter parses the class definition,
-such as methods on self.
-"""
+		1. You can provide a callable.
+		2. You can provide ``None`` for no transformation.
+		3. You can provide a string name of a callable on self which is retrieved
+			from self similarly to:
+
+		>>> ast = StateTransformer('idBoard', 'board', api_transformer=Card.get, state_transformer=operator.attrgetter('id'))
+		>>> call_me = getattr(self, ast.transformer)
+		>>> assert callable(call_me)
+
+		This third type of transformer is provided to enable you to use callables that
+		are undefined at the time the python interpreter parses the class definition,
+		such as methods on self.
+
+		:param api_name: Name used to get value from the API dict.
+		:param state_name: Name of the attribute on :class:`.TrelloObject` instances.
+		:param api_transformer: Used to transform from API value to state value.
+		:param state_transformer: Used to transform from state value to API value.
+		"""
+
+		self.api_name = api_name
+		self.state_name = state_name
+		self.api_transformer = api_transformer
+		self.state_transformer = state_transformer
 
 
 def get_class_for_data(data: dict):
@@ -71,6 +85,7 @@ def get_obj_instance_for_data_s(data: dict, tc: trello_client.TrelloClient, infl
 		get_obj_instance_for_data(data, tc, inflate_children=inflate_children)
 	)
 
+
 def transform_date_from_api(date_str: str) -> datetime.datetime:
 	# parse date fields into datetime objects
 	try:
@@ -78,10 +93,12 @@ def transform_date_from_api(date_str: str) -> datetime.datetime:
 	except ValueError:
 		return
 
+
 def transform_date_from_state(dt: datetime.datetime) -> str:
 	dt_str = dt.isoformat()
 	dt_str = re.sub("\+00:00$", "Z", dt_str)
 	return dt_str
+
 
 class TrelloObjectCollection(list, Synchronizer):
 	"""
@@ -112,15 +129,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	"""
 	The base class for all Trello objects.
 
-	Because this is a subclass of :class:`Synchronizer`, every explicitly
+	Because this is a subclass of :class:`~util.Synchronizer`, every explicitly
 	declared coroutine method, has a corresponding synchronous method with the
 	same name followed by the suffix ``_s``.
 
 	For example, the method	:meth:`~rosetrellis.models.TrelloObject.save` has
 	a partner synchronous method :meth:`~rosetrellis.models.TrelloObject.save_s`
-	that is generated at runtime by :class:`Synchronizer`.
+	that is generated at runtime by :class:`~util.Synchronizer`.
 	"""
-
 
 	API_STATE_TRANSFORMERS = ()
 	"""
@@ -142,63 +158,6 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	STATE_SINGLE_ATTR = ''  #: Name of attribute to use on object instances for a relation to a single object
 	API_MANY_KEY = ''  #: The name used on the Trello API to represent multiple instances
 	STATE_MANY_ATTR = ''  #: Name of attribute to use on object instances for a relation to multiple objects
-
-	def get_transformer_for_api_key(self, api_key: str) -> StateTransformer:
-		transformer = None
-		for st in self.API_STATE_TRANSFORMERS:
-			if st.api_name == api_key:
-				transformer = st
-		for st in self.get_additional_transformers():
-			if st.api_name == api_key:
-				transformer = st
-		return transformer
-
-	@classmethod
-	def get_transformer_for_state_attr(self, attr: str) -> StateTransformer:
-		transformer = None
-		for st in self.API_STATE_TRANSFORMERS:
-			if st.state_name == attr:
-				transformer = None
-		for st in self.get_additional_transformers():
-			if st.api_name == attr:
-				transformer = st
-		return transformer
-
-	@classmethod
-	def make_simple_transformers(cls, field_names: Sequence[str]) -> list:
-		"""
-		Convenience class method for turning a list of field names into simple
-		:attr:`~.StateTransformer`'s which just use the same api
-		and instance names without any transformations on the value.
-
-		:param field_names:
-		:return:
-		"""
-		transformers = []
-		for fn in field_names:
-			api_transformer = transform_date_from_api if 'date' in fn else None
-			state_transformer = transform_date_from_state if 'date' in fn else None
-			transformers.append(
-				StateTransformer(api_name=fn,
-				                              state_name=fn,
-				                              api_transformer=None,
-				                              state_transformer=None)
-			)
-		return transformers
-
-	@classmethod
-	def get_transformer_for_single(cls):
-		if not cls.API_SINGLE_KEY or not cls.STATE_SINGLE_ATTR:
-			raise ValueError("TrelloObject-implementing classes must provide 'API_SINGLE_KEY' and "
-			                 "'STATE_SINGLE_ATTR' class attributes")
-		return StateTransformer(cls.API_SINGLE_KEY, cls.STATE_SINGLE_ATTR, 'get', id_getter)
-
-	@classmethod
-	def get_transformer_for_many(cls):
-		if not cls.API_MANY_KEY or not cls.STATE_MANY_ATTR:
-			raise ValueError("TrelloObject-implementing classes must provide 'API_MANY_KEY' and "
-			                 "'STATE_MANY_ATTR' class attributes")
-		return StateTransformer(cls.API_MANY_KEY, cls.STATE_MANY_ATTR, 'get_many', ids_getter)
 
 	def __init__(self, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
 		"""
@@ -223,30 +182,9 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		self._refreshed_at = 0
 		self.id = kwargs.get('id', None)
 
-		self.TRANSFORM_ONE = StateTransformer(self.API_SINGLE_KEY, self.STATE_SINGLE_ATTR, 'get', id_getter)
-		self.TRANSFORM_MANY = StateTransformer(self.API_MANY_KEY, self.STATE_MANY_ATTR, 'get_many', ids_getter)
-
-	def get_additional_transformers(self):
-		"""
-		Provides additional transformers for :attr:`.API_STATE_TRANSFORMERS`.
-
-		Override this method if implementing class needs to provide transformers
-		that can't be provided in the class attribute :attr:`.API_STATE_TRANSFORMERS`.
-
-		You might need to do this if the transformer you need to provide isn't defined
-		at the time the python interpreter parses the class definition.
-
-		For example, :class:`.Organization` needs the :attr:`.Board.TRANSFORM_ONE`
-		transformer, but ``Board`` is not yet defined when the class definition for
-		``Organization`` is parsed, so we could override this method like so::
-
-			def get_additional_transformers(self):
-				return (Board.TRANSFORM_ONE,)
-
-		:return: A tuple of :class:`.StateTransformer`'s
-		"""
-		return ()
-
+	#####################################
+	## API Retrieval methods
+	#####################################
 	@classmethod
 	@asyncio.coroutine
 	def get(cls, data_or_id: Union[str, dict],
@@ -346,6 +284,9 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		results = yield from asyncio.gather(*getters)
 		return TrelloObjectCollection(results)
 
+	#####################################
+	## Instance <-> API management
+	#####################################
 	@asyncio.coroutine
 	def delete(self):
 		"""
@@ -362,8 +303,8 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 	def create(self):
 		create_data = self.get_api_create_from_state()
-
-		yield from self.state_from_api(create_data)
+		new_data = yield from self.create_on_api(create_data)
+		yield from self.state_from_api(new_data)
 
 	@asyncio.coroutine
 	def save(self) -> None:
@@ -371,7 +312,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		A coroutine.
 
 		Saves changes to Trello api"""
-		if not hasattr(self, 'id'):
+		if not self.id:
 			# This is a new object, so create it
 			yield from self.create()
 			assert getattr(self, 'id', None) is not None
@@ -406,15 +347,18 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		self._raw_data = api_data
 		transformations = []
 		for k, v in api_data.items():
-			transformer = self.get_transformer_for_api_key(k)
-			transformer_func = transformer.api_transformer
+			transformer = self._get_transformer_for_api_key(k)
+
+			# If we don't have a value for this key, then we don't run any transformer
+			transformer_func = None if v is None else transformer.api_transformer
 
 			if isinstance(transformer_func, str):
 				# Provided with string.  Should be a reference to
 				# method on self.
 				transformer_func = getattr(self, transformer.api_transformer, None)
 				if not transformer_func or not callable(transformer_func):
-					raise ValueError("Do not know how to get transformer described by: '{}'".format(transformer.api_transformer))
+					raise ValueError(
+						"Do not know how to get transformer described by: '{}'".format(transformer.api_transformer))
 
 			if asyncio.iscoroutinefunction(transformer_func):
 				transformations.append(self._inflator(transformer.state_name, v, transformer_func))
@@ -422,7 +366,6 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 				setattr(self, transformer.state_name, v)
 			else:
 				setattr(self, transformer.state_name, transformer_func(v))
-
 
 		if transformations:
 			yield from asyncio.wait(transformations)
@@ -434,6 +377,9 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		new_value = yield from inflator(orig_value, self.tc)
 		setattr(self, dest_field, new_value)
 
+	#####################################
+	## Abstract methods
+	#####################################
 	@classmethod
 	@abc.abstractmethod
 	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
@@ -475,6 +421,15 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		"""
 
 	@abc.abstractmethod
+	def create_on_api(self, data: dict) -> dict:
+		"""
+		Abstract method that creates object on Trello API.
+
+		:param data:  The data to create the object.
+		:return: The new data for our state.
+		"""
+
+	@abc.abstractmethod
 	def get_api_update_from_state(self) -> dict:
 		"""
 		Abstract method that returns how current state differs from original data.
@@ -500,17 +455,131 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		return all([key in self.API_FIELDS for key in data])
 
-	def is_inflated(self) -> bool:
-		return all([hasattr(self, f) for f in self.get_inflated_fields()])
+	def _get_create_dict(self, fields: List[str]) -> dict:
+		create_dict = {}
+		for f in fields:
+			value = getattr(self, f, None)
+			if value:
+				create_dict[f] = value
 
-	def get_inflated_fields(self) -> List[str]:
-		fields = []
-		for k, v in self.INFLATORS.items():
-			inflator_definition = getattr(self, v, None)
-			if not inflator_definition:
-				continue
-			fields.append(inflator_definition['dest_field'])
-		return fields
+		return create_dict
+
+	#####################################
+	## Transformer methods
+	#####################################
+	def _get_transformer_for_api_key(self, api_key: str) -> StateTransformer:
+		"""
+		Searches our transformers for the one matching the provided api key.
+
+		:param api_key: String name of the api key we're looking to transform.
+		:returns: A :class:`.StateTransformer` or None if we can't find one.
+		"""
+		transformer = None
+		for st in self.API_STATE_TRANSFORMERS:
+			if st.api_name == api_key:
+				transformer = st
+				break
+		for st in self._get_additional_transformers():
+			if st.api_name == api_key:
+				transformer = st
+				break
+		return transformer
+
+	def _get_transformer_for_state_attr(self, attr: str) -> StateTransformer:
+		"""
+		Searches our transformers for the one matching the provided attribute.
+
+		:param attr: String name of the attribute we're looking to transform.
+		:returns: A :class:`.StateTransformer` or None if we can't find one.
+		"""
+
+		transformer = None
+		for st in self.API_STATE_TRANSFORMERS:
+			if st.state_name == attr:
+				transformer = None
+				break
+		for st in self._get_additional_transformers():
+			if st.api_name == attr:
+				transformer = st
+				break
+		return transformer
+
+	@classmethod
+	def _make_simple_transformers(cls, field_names: Sequence[str]) -> list:
+		"""
+		Convenience class method for turning a list of field names into simple
+		:attr:`~.StateTransformer`'s which just use the same api
+		and instance names without any transformations on the value.
+
+		:param field_names:
+		:return:
+		"""
+		transformers = []
+		for fn in field_names:
+			api_transformer = transform_date_from_api if 'date' in fn else None
+			state_transformer = transform_date_from_state if 'date' in fn else None
+			transformers.append(
+				StateTransformer(api_name=fn,
+				                 state_name=fn,
+				                 api_transformer=None,
+				                 state_transformer=None)
+			)
+		return transformers
+
+	@classmethod
+	def _get_transformer_for_single(cls):
+		"""
+		Provides a StateTransformer that transforms the api representation (normally an id)
+		of this type of class into a TrelloObject-subclassing instance.
+
+		:returns: A :class:`.StateTransformer` that transforms an api value into
+			this subclass of :class:`.TrelloObject`.
+		:raise ValueError: If this subclass isn't configured with :attr:`.API_SINGLE_KEY`
+			and :attr:`.STATE_SINGLE_ATTR`.
+		"""
+		if not cls.API_SINGLE_KEY or not cls.STATE_SINGLE_ATTR:
+			raise ValueError("TrelloObject-implementing classes must provide 'API_SINGLE_KEY' and "
+			                 "'STATE_SINGLE_ATTR' class attributes")
+		return StateTransformer(cls.API_SINGLE_KEY, cls.STATE_SINGLE_ATTR, api_transformer=cls.get)
+
+	@classmethod
+	def _get_transformer_for_many(cls):
+		"""
+		Provides a StateTransformer that transforms the api representation of a list
+		(nromally a list of ids) of this type of class into a TrelloObject-subclassing instance.
+
+		:returns: A :class:`.StateTransformer` that transforms an api value into
+			this subclass of :class:`.TrelloObject`.
+		:raise ValueError: If this subclass isn't configured with :attr:`.API_MANY_KEY`
+			and :attr:`.STATE_MANY_ATTR`.
+		"""
+
+		if not cls.API_MANY_KEY or not cls.STATE_MANY_ATTR:
+			raise ValueError("TrelloObject-implementing classes must provide 'API_MANY_KEY' and "
+			                 "'STATE_MANY_ATTR' class attributes")
+		return StateTransformer(cls.API_MANY_KEY, cls.STATE_MANY_ATTR,
+		                        api_transformer=cls.get_many, state_transformer=ids_getter)
+
+	def _get_additional_transformers(self):
+		"""
+		Provides additional transformers for :attr:`.API_STATE_TRANSFORMERS`.
+
+		Override this method if implementing class needs to provide transformers
+		that can't be provided in the class attribute :attr:`.API_STATE_TRANSFORMERS`.
+
+		You might need to do this if the transformer you need to provide isn't defined
+		at the time the python interpreter parses the class definition.
+
+		For example, :class:`.Organization` needs the :attr:`.Board.TRANSFORM_ONE`
+		transformer, but ``Board`` is not yet defined when the class definition for
+		``Organization`` is parsed, so we could override this method like so::
+
+			def get_additional_transformers(self):
+				return (Board.TRANSFORM_ONE,)
+
+		:return: A tuple of :class:`.StateTransformer`'s
+		"""
+		return ()
 
 
 class Organization(TrelloObject):
@@ -523,25 +592,14 @@ class Organization(TrelloObject):
 	                      'website')
 	_relation_api_fields = ('idBoards',)
 
-	API_STATE_TRANSFORMERS = TrelloObject.make_simple_transformers(_simple_api_fields)
+	API_STATE_TRANSFORMERS = TrelloObject._make_simple_transformers(_simple_api_fields)
 
 	API_SINGLE_KEY = 'idOrganization'
 	STATE_SINGLE_ATTR = 'organization'
 	API_MANY_KEY = 'idOrganizations'
 	STATE_MANY_ATTR = 'organizations'
 
-	def get_additional_transformers(self):
-		return (Board.get_transformer_for_many(),)
-
 	def __init__(self, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
-		"""
-		See also docs at :class:`~.TrelloObject`
-
-		:param kwargs: If creating a new object you need to provide at least one of:
-
-			* **name**
-			* **displayName**
-		"""
 		super().__init__(tc, *args, **kwargs)
 
 		self.name = kwargs.get('name', '')
@@ -551,6 +609,9 @@ class Organization(TrelloObject):
 
 		if self.website and not is_valid_website(self.website):
 			raise ValueError('website must start with "http://" or "https://"')
+
+	def _get_additional_transformers(self):
+		return (Board._get_transformer_for_many(),)
 
 	@classmethod
 	@asyncio.coroutine
@@ -569,6 +630,10 @@ class Organization(TrelloObject):
 	@asyncio.coroutine
 	def changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_organization(self.id, changes))
+
+	@asyncio.coroutine
+	def create_on_api(self, data: dict) -> dict:
+		return (yield from self.tc.create_organization(data))
 
 	def get_api_update_from_state(self):
 		"""
@@ -632,21 +697,37 @@ class Board(TrelloObject):
 	                      'id', 'invitations', 'invited', 'labelNames', 'memberships',
 	                      'name', 'pinned', 'powerUps', 'prefs', 'shortLink', 'shortUrl',
 	                      'starred', 'subscribed', 'url')
-	_relation_api_fields = ('idOrganization', )
+	_relation_api_fields = ('idOrganization',)
 
-	API_STATE_TRANSFORMERS = TrelloObject.make_simple_transformers(_simple_api_fields)
-	
+	API_STATE_TRANSFORMERS = TrelloObject._make_simple_transformers(_simple_api_fields)
+
 	API_SINGLE_KEY = 'idBoard'
 	STATE_SINGLE_ATTR = 'board'
 	API_MANY_KEY = 'idBoards'
 	STATE_MANY_ATTR = 'boards'
 
-	def get_additional_transformers(self):
-		return (Organization.get_transformer_for_single(),)
+	def _get_additional_transformers(self):
+		return (Organization._get_transformer_for_single(),)
 
 	def __init__(self, tc, *args, **kwargs):
 		super().__init__(tc, *args, **kwargs)
+		# TODO: Support idBoardSource and keepFromSource
 
+		self.name = kwargs.get('name', '')
+		self.desc = kwargs.get('desc', '')
+
+		self.organization = kwargs.get('organization', None)
+		self.idOrganization = kwargs.get('idOrganization', None)
+		if not self.idOrganization and self.organization:
+			self.idOrganization = id_getter(self.organization)
+
+		self.boards = kwargs.get('boards', [])
+		self.idBoards = kwargs.get('idBoards', [])
+		if not self.idBoards and self.boards:
+			self.idBoards = ids_getter(self.boards)
+
+		self.powerUps = kwargs.get('powerUps', '')
+		self.prefs = kwargs.get('prefs', None)
 
 	@classmethod
 	@asyncio.coroutine
@@ -675,6 +756,10 @@ class Board(TrelloObject):
 	def changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_board(self.id, changes))
 
+	@asyncio.coroutine
+	def create_on_api(self, data: dict) -> dict:
+		return (yield from self.tc.create_board(data))
+
 	def get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
@@ -683,7 +768,7 @@ class Board(TrelloObject):
 			changes['desc'] = self.desc
 		if self.closed != self._raw_data['closed']:
 			changes['closed'] = self.closed
-		if self.organization.id != self._raw_data['idOrganization']:
+		if self.organization and self.organization.id != self._raw_data['idOrganization']:
 			changes['idOrganization'] = self.organization.id
 
 		changes.update(self.prefs.get_api_update_from_state())
@@ -694,7 +779,8 @@ class Board(TrelloObject):
 		if not getattr(self, 'name', None):
 			raise ValueError("Must have Board.name to create a Board")
 
-		data = {'name': self.name}
+		# TODO: Handle prefs
+		return self._get_create_dict(['name', 'desc', 'idOrganization', 'powerups'])
 
 	@asyncio.coroutine
 	def get_labels(self):

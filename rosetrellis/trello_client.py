@@ -3,7 +3,6 @@ import logging
 import os
 import asyncio
 import random
-from sqlite3.dbapi2 import paramstyle
 import time
 
 import aiohttp
@@ -45,6 +44,14 @@ def _parse_batch(batch_resp: list) -> Tuple[Union[List[dict], List[tuple]]]:
 				bad.append((k, v))
 
 	return good, bad
+
+def _dict_to_params(data: dict, field_names: List[str]) -> dict:
+	params = {}
+	for field in field_names:
+		value = data.get(field)
+		if value:
+			params[field] = value
+	return params
 
 
 class CachedUrl:
@@ -219,6 +226,24 @@ class TrelloClientBoardMixin:
 	def get_board_url(self, board_id: str) -> str:
 		return 'boards/{}'.format(board_id)
 
+	@asyncio.coroutine
+	def create_board(self,
+	                 name: str,
+	                 desc: str="",
+	                 idOrganization: str="",
+	                 powerUps: Union[Sequence[str], str]="default"):
+		# TODO: Handle board prefs
+		powerUps = _prepare_list_param(powerUps)
+		params = {"name": name}
+		if desc:
+			params['desc'] = desc
+		if idOrganization:
+			params['idOrganization'] = idOrganization
+		if powerUps:
+			params['powerUps'] = powerUps
+
+		return (yield from self.post('boards', params=params))
+
 
 	@asyncio.coroutine
 	def get_board(self, board_id: str, fields: Union[Sequence[str], str]="default") -> dict:
@@ -304,19 +329,19 @@ class TrelloClientOrgMixin:
 		return (yield from self.put(url, params=params))
 
 	@asyncio.coroutine
-	def create_organization(self, displayName: str, name: str="", desc: str="", website: str="") -> dict:
+	def create_organization(self, data: dict) -> dict:
 		url = 'organizations'
-		params = {}
-		if name:
-			params["name"] = name
-		if displayName:
-			params["displayName"] = displayName
-		if desc:
-			params["desc"] = desc
-		if website:
-			params["website"] = website
 
-		return (yield from self.post(url, params=params))
+		if 'powerUps' in data:
+			data['powerUps'] = _prepare_list_param(data['powerUps'])
+
+		fields = ['name', 'desc', 'idOrganization', 'idBoardSource', 'keepFromSource',
+		          'powerUps', 'prefs_permissionLevel', 'prefs_voting', 'prefs_comments',
+		          'prefs_invitations', 'prefs_selfJoin', 'prefs_cardCovers',
+		          'prefs_background', 'prefs_cardAging']
+
+
+		return (yield from self.create(url, data, fields))
 
 
 class TrelloClientListsMixin:
@@ -461,3 +486,8 @@ class TrelloClient(TrelloClientCardMixin,
 		url = 'batch'
 		params = {'urls': _prepare_list_param(routes)}
 		return (yield from self.get(url, params=params))
+
+	@asyncio.coroutine
+	def create(self, url: str, data: dict, post_fields: List[str]) -> dict:
+		params = _dict_to_params(data, post_fields)
+		return (yield from self.post(url, params=params))
