@@ -669,21 +669,10 @@ class Organization(TrelloObject):
 
 	def _get_api_create_from_state(self) -> dict:
 		if not self.name or self.displayName:
-			raise ValueError("Cannot create an 'Organization' without a name or displayName property on self.")
-
-		data = {}
-		if self.name:
-			data['name'] = self.name
-		else:
-			data['displayName'] = self.displayName
-
-		if self.desc:
-			data['desc'] = self.desc
-
-		if self.website:
-			data['website'] = self.website
-
-		return data
+			raise ValueError("Cannot create an 'Organization' without a name or "
+			                 "displayName property on self.")
+		
+		return self._stripped_dict_from_fields(['name', 'displayName', 'desc', 'website'])
 
 	def __repr__(self):
 		if self._refreshed_at:
