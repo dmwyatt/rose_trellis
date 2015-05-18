@@ -144,7 +144,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 	Looks something like the following example::
 
-		API_STATE_TRANSFORMERS = (StateTransformer('idBoard', 'board', 'BOARD_INFLATE', operator.attrgetter('id'))
+		API_STATE_TRANSFORMERS = (StateTransformer('idBoard', 'board', None, operator.attrgetter('id'))
 
 	A :class:`.StateTransformer` should be provided for every
 	valid API key even if no changes to the attribute name or value are needed so
@@ -237,20 +237,20 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		if obj is None and not data:
 			logger.debug("No cached object and no provided data, requesting data from TrelloClient.")
-			resp = yield from cls.get_data(id_, tc, **kwargs)
+			resp = yield from cls._get_data(id_, tc, **kwargs)
 			obj = cls(tc, id=id_, **kwargs)
 			obj_cache.set(obj)
-			yield from obj.state_from_api(resp, inflate_children=inflate_children)
+			yield from obj._state_from_api(resp, inflate_children=inflate_children)
 
 		elif obj is None and data:
 			logger.debug("No cached object.  Building object from provided data.")
 			obj = cls(tc, id=data['id'], **kwargs)
 			obj_cache.set(obj)
-			yield from obj.state_from_api(data, inflate_children=inflate_children)
+			yield from obj._state_from_api(data, inflate_children=inflate_children)
 
 		elif obj and data:
 			logger.debug("Found cached object.  Updating with provided data.")
-			yield from obj.state_from_api(data, inflate_children=inflate_children)
+			yield from obj._state_from_api(data, inflate_children=inflate_children)
 
 		return obj
 
@@ -295,16 +295,16 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		Deletes instance from Trello API and removes all data from self."""
 
 		# TODO: We have other attributes we need to delete.  For example, we change 'idBoard' to a board instance on self.board.
-		response = yield from self.delete_from_api()
+		response = yield from self._delete_from_api()
 		obj_cache.remove(self.id)
 		for k, v in self._raw_data.items():
 			delattr(self, k)
 		delattr(self, '_raw_data')
 
 	def create(self):
-		create_data = self.get_api_create_from_state()
-		new_data = yield from self.create_on_api(create_data)
-		yield from self.state_from_api(new_data)
+		create_data = self._get_api_create_from_state()
+		new_data = yield from self._create_on_api(create_data)
+		yield from self._state_from_api(new_data)
 
 	@asyncio.coroutine
 	def save(self) -> None:
@@ -317,10 +317,10 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			yield from self.create()
 			assert getattr(self, 'id', None) is not None
 
-		changes = self.get_api_update_from_state()
+		changes = self._get_api_update_from_state()
 		if changes:
-			new_data = yield from self.changes_to_api(changes)
-			yield from self.state_from_api(new_data)
+			new_data = yield from self._changes_to_api(changes)
+			yield from self._state_from_api(new_data)
 
 	@asyncio.coroutine
 	def refresh(self, inflate_children=True):
@@ -329,11 +329,11 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		Refreshes data from Trello.
 		"""
-		data = yield from self.get_data(self.id, self.tc)
-		yield from self.state_from_api(data, inflate_children=inflate_children)
+		data = yield from self._get_data(self.id, self.tc)
+		yield from self._state_from_api(data, inflate_children=inflate_children)
 
 	@asyncio.coroutine
-	def state_from_api(self, api_data: dict, inflate_children: bool=True):
+	def _state_from_api(self, api_data: dict, inflate_children: bool=True):
 		"""
 		Takes a dict, ``api_data``, and creates the state of this object using
 		the information contained within.
@@ -382,7 +382,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	#####################################
 	@classmethod
 	@abc.abstractmethod
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
 		"""
 		Abstract classmethod that retrieves data from Trello for the provided id.
 
@@ -405,13 +405,13 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		"""
 
 	@abc.abstractmethod
-	def delete_from_api(self) -> None:
+	def _delete_from_api(self) -> None:
 		"""
 		Abstract method that deletes this instance from the Trello API.
 		"""
 
 	@abc.abstractmethod
-	def changes_to_api(self, changes: dict) -> dict:
+	def _changes_to_api(self, changes: dict) -> dict:
 		"""
 		Abstract method that sends data to Trello API.
 
@@ -421,7 +421,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		"""
 
 	@abc.abstractmethod
-	def create_on_api(self, data: dict) -> dict:
+	def _create_on_api(self, data: dict) -> dict:
 		"""
 		Abstract method that creates object on Trello API.
 
@@ -430,7 +430,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		"""
 
 	@abc.abstractmethod
-	def get_api_update_from_state(self) -> dict:
+	def _get_api_update_from_state(self) -> dict:
 		"""
 		Abstract method that returns how current state differs from original data.
 
@@ -438,22 +438,12 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		"""
 
 	@abc.abstractmethod
-	def get_api_create_from_state(self) -> dict:
+	def _get_api_create_from_state(self) -> dict:
 		"""
 		Determines the data to use to create an instance on API from current state.
 
 		:returns: The data that is needed to POST to API.
 		"""
-
-	@classmethod
-	def is_valid_data(self, data: dict) -> bool:
-		"""
-		Determines whether the provided dict is valid data for this object.
-
-		:returns: A bool indicating whether this is valid dat.
-		"""
-
-		return all([key in self.API_FIELDS for key in data])
 
 	def _get_create_dict(self, fields: List[str]) -> dict:
 		create_dict = {}
@@ -615,7 +605,7 @@ class Organization(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs) -> dict:
 		return (yield from tc.get_organization(id_, fields="all"))
 
 	@classmethod
@@ -624,18 +614,18 @@ class Organization(TrelloObject):
 		raise NotImplementedError
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		yield from self.tc.delete_organization(self.id)
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict) -> dict:
+	def _changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_organization(self.id, changes))
 
 	@asyncio.coroutine
-	def create_on_api(self, data: dict) -> dict:
+	def _create_on_api(self, data: dict) -> dict:
 		return (yield from self.tc.create_organization(data))
 
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		"""
 		Return dict of changes between current state and data we were
 		instantiated with.
@@ -667,7 +657,7 @@ class Organization(TrelloObject):
 
 		return changes
 
-	def get_api_create_from_state(self) -> dict:
+	def _get_api_create_from_state(self) -> dict:
 		if not self.name or self.displayName:
 			raise ValueError("Cannot create an 'Organization' without a name or displayName property on self.")
 
@@ -731,7 +721,7 @@ class Board(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
 		return (yield from tc.get_board(id_, fields="all"))
 
 	@classmethod
@@ -742,7 +732,7 @@ class Board(TrelloObject):
 		return (yield from cls.get_many(boards_data, tc, inflate_children=inflate_children))
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		"""
 		Boards can't be deleted!
 
@@ -753,14 +743,14 @@ class Board(TrelloObject):
 		raise NotImplementedError("Trello does not permit deleting of boards.  Try `Board.close()`")
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_board(self.id, changes))
 
 	@asyncio.coroutine
-	def create_on_api(self, data: dict) -> dict:
+	def _create_on_api(self, data: dict) -> dict:
 		return (yield from self.tc.create_board(data))
 
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
 			changes['name'] = self.name
@@ -775,7 +765,7 @@ class Board(TrelloObject):
 
 		return changes
 
-	def get_api_create_from_state(self) -> dict:
+	def _get_api_create_from_state(self) -> dict:
 		if not getattr(self, 'name', None):
 			raise ValueError("Must have Board.name to create a Board")
 
@@ -867,7 +857,7 @@ class Lists(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
 		return (yield from tc.get_list(id_, fields="all"))
 
 	@classmethod
@@ -879,14 +869,14 @@ class Lists(TrelloObject):
 		return TrelloObjectCollection(lists)
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		raise NotImplementedError("Trello does not permit list deletion.  Try closing the list instead.")
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_list(self.id, changes))
 
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
 			changes['name'] = self.name
@@ -929,7 +919,7 @@ class Card(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient) -> dict:
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient) -> dict:
 		return (yield from tc.get_card(card_id=id_, fields="all"))
 
 	@classmethod
@@ -944,15 +934,15 @@ class Card(TrelloObject):
 		)
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		yield from self.tc.delete_card(self.id)
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict):
 		updated_api_data = yield from self.tc.update_card(self.id, changes)
 		return updated_api_data
 
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
 			changes['name'] = self.name
@@ -971,7 +961,7 @@ class Card(TrelloObject):
 		return changes
 
 	@asyncio.coroutine
-	def state_from_api(self, api_data, inflate_children=True):
+	def _state_from_api(self, api_data, inflate_children=True):
 		"""sub"""
 
 		if 'labels' in api_data and inflate_children:
@@ -982,7 +972,7 @@ class Card(TrelloObject):
 			except KeyError:
 				pass
 
-		yield from super(Card, self).state_from_api(api_data, inflate_children=inflate_children)
+		yield from super(Card, self)._state_from_api(api_data, inflate_children=inflate_children)
 
 	@property
 	def label_colors(self) -> List:
@@ -1008,7 +998,7 @@ class Checklist(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient):
 		return (yield from tc.get_checklist(id_))
 
 	@classmethod
@@ -1022,14 +1012,14 @@ class Checklist(TrelloObject):
 		return checklists
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		return (yield from self.tc.delete_checklist(self.id))
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_checklist(self.id, changes))
 
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
 			changes['name'] = self.name
@@ -1059,7 +1049,7 @@ class Checklist(TrelloObject):
 		return [ci for ci in self.check_items if ci.complete]
 
 	@asyncio.coroutine
-	def state_from_api(self, api_data, inflate_children=True):
+	def _state_from_api(self, api_data, inflate_children=True):
 		if 'checkItems' in api_data and inflate_children:
 			self.check_items = yield from CheckItem.get_many(
 				api_data['checkItems'],
@@ -1070,7 +1060,7 @@ class Checklist(TrelloObject):
 
 			del api_data['checkItems']
 
-		yield from super(Checklist, self).state_from_api(api_data, inflate_children=inflate_children)
+		yield from super(Checklist, self)._state_from_api(api_data, inflate_children=inflate_children)
 
 	def __repr__(self):
 		if self._refreshed_at:
@@ -1094,7 +1084,7 @@ class CheckItem(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, checkitem_id: str, tc: trello_client.TrelloClient, checklist_id: str=None):
+	def _get_data(cls, checkitem_id: str, tc: trello_client.TrelloClient, checklist_id: str=None):
 		if not checklist_id:
 			raise ValueError("Must provide checklist id to CheckItem")
 		return (yield from tc.get_checkitem(checklist_id, checkitem_id))
@@ -1105,14 +1095,14 @@ class CheckItem(TrelloObject):
 		raise NotImplementedError
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		return (yield from self.tc.delete_checkitem(self.id, self.checklist.id))
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_checkitem(self.card_id, self.checklist_id, self.id, changes))
 
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
 			changes['name'] = self.name
@@ -1158,7 +1148,7 @@ class Label(TrelloObject):
 
 	@classmethod
 	@asyncio.coroutine
-	def get_data(cls, id_: str, tc: trello_client.TrelloClient):
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient):
 		return (yield from tc.get_label(id_))
 
 	@classmethod
@@ -1167,11 +1157,11 @@ class Label(TrelloObject):
 		raise NotImplementedError
 
 	@asyncio.coroutine
-	def delete_from_api(self):
+	def _delete_from_api(self):
 		return (yield from self.tc.delete_label())
 
 	@asyncio.coroutine
-	def changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_label(self.id, changes))
 
 	@classmethod
@@ -1181,13 +1171,13 @@ class Label(TrelloObject):
 		labels = TrelloObjectCollection()
 		for label_data in labels_data:
 			label = Label(label_data['id'], tc)
-			yield from label.state_from_api(label_data)
+			yield from label._state_from_api(label_data)
 			obj_cache.set(label)
 			labels.append(label)
 		return labels
 
 	@asyncio.coroutine
-	def get_api_update_from_state(self):
+	def _get_api_update_from_state(self):
 		changes = {}
 		if self.name != self._raw_data['name']:
 			changes['name'] = self.name
