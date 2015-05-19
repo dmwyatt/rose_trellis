@@ -136,6 +136,28 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	For example, the method	:meth:`~rosetrellis.models.TrelloObject.save` has
 	a partner synchronous method :meth:`~rosetrellis.models.TrelloObject.save_s`
 	that is generated at runtime by :class:`~util.Synchronizer`.
+
+	At a minimum, implementing classes must override or provide the following
+	members:
+
+	* :attr:`.API_STATE_TRANSFORMERS`
+	* :attr:`.API_SINGLE_KEY`
+	* :attr:`.STATE_SINGLE_ATTR`
+	* :attr:`.API_MANY_KEY`
+	* :attr:`.STATE_MANY_ATTR`
+	* :meth:`.get_all`
+
+	The following are all private abstract methods that should be overriden:
+
+	* :meth:`._get_data`
+	* :meth:`._delete_from_api`
+	* :meth:`._changes_to_api`
+	* :meth:`._create_on_api`
+	* :meth:`._get_api_update_from_state`
+	* :meth:`._get_api_create_from_state`
+
+	Additionally, the implementing class will likely want to override
+	:meth:`._get_additional_transformers`.
 	"""
 
 	API_STATE_TRANSFORMERS = ()
