@@ -11,7 +11,7 @@ import datetime
 import re
 
 from dateutil import parser
-from typing import Any, List, Union, Sequence, Callable
+from typing import Any, List, Union, Sequence, Callable, Tuple, Dict
 
 import rosetrellis.base.obj_cache as obj_cache
 import rosetrellis.trello_client as trello_client
@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 id_getter = operator.attrgetter('id')
 ids_getter = make_sequence_attrgetter('id')
+
+
+class IsCoroutineError(Exception):
+	pass
 
 
 class StateTransformer:
@@ -64,10 +68,22 @@ class StateTransformer:
 		self.api_transformer = api_transformer
 		self.state_transformer = state_transformer
 
+	def __repr__(self):
+		return "<StateTransformer: api_name={} state_name={} api_transformer={} state_transformer={}>".format(
+			self.api_name, self.state_name, self.api_transformer, self.state_transformer
+		)
+
 
 def get_class_for_data(data: dict):
 	for subclass in TrelloObject.__subclasses__():
 		if subclass.is_valid_data(data):
+			return subclass
+
+
+def get_class_for_api_key(api_key: str):
+	classes = TrelloObject.__subclasses__()
+	for subclass in TrelloObject.__subclasses__():
+		if api_key in subclass._get_api_keys():
 			return subclass
 
 
@@ -140,11 +156,12 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	At a minimum, implementing classes must override or provide the following
 	members:
 
-	* :attr:`.API_STATE_TRANSFORMERS`
 	* :attr:`.API_SINGLE_KEY`
 	* :attr:`.STATE_SINGLE_ATTR`
 	* :attr:`.API_MANY_KEY`
 	* :attr:`.STATE_MANY_ATTR`
+	* :attr:`.API_NESTED_MANY_KEY`
+	* :attr:`.API_NESTED_SINGLE_KEY`
 	* :meth:`.get_all`
 
 	The following are all private abstract methods that should be overriden:
@@ -160,26 +177,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	:meth:`._get_additional_transformers`.
 	"""
 
-	API_STATE_TRANSFORMERS = ()
-	"""
-	A sequence of :class:`.StateTransformer`'s.
-
-	Looks something like the following example::
-
-		API_STATE_TRANSFORMERS = (StateTransformer('idBoard', 'board', None, operator.attrgetter('id'))
-
-	A :class:`.StateTransformer` should be provided for every
-	valid API key even if no changes to the attribute name or value are needed so
-	that we can use it to validate data provided to the class.
-
-	If need to refer to transformer that isn't defined at time when python interpreter
-	parses this declaration, provide a tuple of two strings
-	"""
-
+	API_FIELDS = () #: A list of all fields we should expect from the API.
 	API_SINGLE_KEY = ''  #: The name used on the Trello API to represent a single instance
 	STATE_SINGLE_ATTR = ''  #: Name of attribute to use on object instances for a relation to a single object
 	API_MANY_KEY = ''  #: The name used on the Trello API to represent multiple instances
 	STATE_MANY_ATTR = ''  #: Name of attribute to use on object instances for a relation to multiple objects
+	API_NESTED_MANY_KEY = '' #: Name of key for when Trello nests the JSON for multiple objects in another instance
+	API_NESTED_SINGLE_KEY = '' #: Name of key for when Trello nests the JSON for a single object in another object
+
 
 	def __init__(self, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
 		"""
@@ -188,9 +193,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		:param kwargs: If creating a new object for Trello, key:value mappings
 			for the fields needed to POST a new object.
 		"""
-		required_attrs = ['API_STATE_TRANSFORMERS', 'API_SINGLE_KEY', 'STATE_SINGLE_ATTR',
-		                  'API_MANY_KEY', 'STATE_MANY_ATTR']
+
+		self.API_STATE_TRANSFORMERS = TrelloObject._make_transformers(self.API_FIELDS)
+		required_attrs = ['API_FIELDS', 'API_SINGLE_KEY', 'STATE_SINGLE_ATTR',
+		                  'API_MANY_KEY', 'STATE_MANY_ATTR', 'API_NESTED_MANY_KEY',
+		                  'API_NESTED_SINGLE_KEY']
 		em = "Subclasses of TrelloObject must provide the {} attribute(s)"
+
+		# Test that implementors of this class have provided the required attributes.
 		fails = []
 		for ra in required_attrs:
 			fail_value = 'blahblahblah'
@@ -203,6 +213,19 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		self.tc = tc
 		self._refreshed_at = 0
 		self.id = kwargs.get('id', None)
+
+	@classmethod
+	def is_valid_data(cls, data: dict) -> dict:
+		extra_api_keys = []
+		missing_api_keys = []
+		for k in data:
+			if k not in cls.API_FIELDS:
+				extra_api_keys.append(k)
+		for f in cls.API_FIELDS:
+			if f not in data:
+				missing_api_keys.append(f)
+
+		return (not(extra_api_keys or missing_api_keys), extra_api_keys, missing_api_keys)
 
 	#####################################
 	## API Retrieval methods
@@ -260,6 +283,14 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		if obj is None and not data:
 			logger.debug("No cached object and no provided data, requesting data from TrelloClient.")
 			resp = yield from cls._get_data(id_, tc, **kwargs)
+			is_valid, extra, missing = cls.is_valid_data(resp)
+			if not is_valid:
+				raise ValueError("Received incorrect API response or {} is misconfigured: \n"
+				                 "extra_keys: {} \n"
+				                 "missing_keys: {}".format(cls.__name__,
+				                                           extra,
+				                                           missing))
+
 			obj = cls(tc, id=id_, **kwargs)
 			obj_cache.set(obj)
 			yield from obj._state_from_api(resp, inflate_children=inflate_children)
@@ -369,25 +400,18 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		self._raw_data = api_data
 		transformations = []
 		for k, v in api_data.items():
+			if k not in self.API_FIELDS:
+				raise ValueError("Received field from API that we don't know about.  '{}' is unknown".format(k))
 			transformer = self._get_transformer_for_api_key(k)
 
 			# If we don't have a value for this key, then we don't run any transformer
 			transformer_func = None if v is None else transformer.api_transformer
 
-			if isinstance(transformer_func, str):
-				# Provided with string.  Should be a reference to
-				# method on self.
-				transformer_func = getattr(self, transformer.api_transformer, None)
-				if not transformer_func or not callable(transformer_func):
-					raise ValueError(
-						"Do not know how to get transformer described by: '{}'".format(transformer.api_transformer))
-
-			if asyncio.iscoroutinefunction(transformer_func):
+			try:
+				result = self._run_transformer_func(v, transformer_func)
+				setattr(self, transformer.state_name, result)
+			except IsCoroutineError:
 				transformations.append(self._inflator(transformer.state_name, v, transformer_func))
-			elif transformer_func is None:
-				setattr(self, transformer.state_name, v)
-			else:
-				setattr(self, transformer.state_name, transformer_func(v))
 
 		if transformations:
 			yield from asyncio.wait(transformations)
@@ -398,6 +422,22 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	def _inflator(self, dest_field, orig_value, inflator):
 		new_value = yield from inflator(orig_value, self.tc)
 		setattr(self, dest_field, new_value)
+
+	def _run_transformer_func(self, value: Any, tf: Union[Callable[Any], str, None]) -> Any:
+		if isinstance(tf, str):
+			_tf = getattr(self, tf, None)
+			if not _tf or not callable(_tf):
+				raise ValueError(
+					"Do not know how to get transformer described by: '{}'".format(tf))
+			else:
+				tf = _tf
+
+		if asyncio.iscoroutinefunction(tf):
+			raise IsCoroutineError
+		elif tf is None:
+			return value
+		else:
+			return tf(value)
 
 	#####################################
 	## Abstract methods
@@ -486,6 +526,21 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		return create_dict
 
+	def _changes_from_raw_data(self, attr_key_pairs: List[Tuple[str, str]]) -> dict:
+		changes = {}
+		for attr, key in attr_key_pairs:
+			if not hasattr(self, attr) or not key in self._raw_data:
+				continue
+			state_transformer = self._get_transformer_for_state_attr(attr)
+			transformer_func = state_transformer.state_transformer
+
+			state_value = self._run_transformer_func(getattr(self, attr), transformer_func)
+
+			if state_value != self._raw_data[key]:
+				changes[key] = state_value
+
+		return changes
+
 	#####################################
 	## Transformer methods
 	#####################################
@@ -505,6 +560,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			if st.api_name == api_key:
 				transformer = st
 				break
+
 		return transformer
 
 	def _get_transformer_for_state_attr(self, attr: str) -> StateTransformer:
@@ -518,7 +574,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		transformer = None
 		for st in self.API_STATE_TRANSFORMERS:
 			if st.state_name == attr:
-				transformer = None
+				transformer = st
 				break
 		for st in self._get_additional_transformers():
 			if st.api_name == attr:
@@ -527,29 +583,63 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		return transformer
 
 	@classmethod
-	def _make_simple_transformers(cls, field_names: Sequence[str]) -> list:
+	def _make_transformers(cls, api_keys: Sequence[str]) -> list:
 		"""
-		Convenience class method for turning a list of field names into simple
-		:attr:`~.StateTransformer`'s which just use the same api
-		and instance names without any transformations on the value.
+		Convenience class method for turning a list of api keys into :attr:`~.StateTransformer`'s
+		which use the same api and instance names.
 
-		:param field_names:
+		:param api_keys:
 		:return:
 		"""
 		transformers = []
-		for fn in field_names:
-			api_transformer = transform_date_from_api if 'date' in fn else None
-			state_transformer = transform_date_from_state if 'date' in fn else None
-			transformers.append(
-				StateTransformer(api_name=fn,
-				                 state_name=fn,
-				                 api_transformer=None,
-				                 state_transformer=None)
-			)
+		for fn in api_keys:
+			klass = get_class_for_api_key(fn)
+			st = None
+			if klass:
+				st = klass._get_relation_transformer_for_api_key(fn)
+				if st:
+					transformers.append(st)
+
+			if not st:
+				api_transformer = transform_date_from_api if 'date' in fn else None
+
+				state_transformer = transform_date_from_state if 'date' in fn else None
+				transformers.append(
+					StateTransformer(api_name=fn,
+					                 state_name=fn,
+					                 api_transformer=api_transformer,
+					                 state_transformer=state_transformer)
+				)
 		return transformers
 
 	@classmethod
-	def _get_transformer_for_single(cls):
+	def _get_state_name_from_api_key(cls, api_key: str) -> str:
+		if api_key == cls.API_SINGLE_KEY:
+			return cls.STATE_SINGLE_ATTR
+		if api_key == cls.API_MANY_KEY:
+			return cls.STATE_MANY_ATTR
+
+	@classmethod
+	def _get_relation_transformer_for_api_key(cls, api_key: str) -> StateTransformer:
+		if api_key in [cls.API_SINGLE_KEY, cls.API_NESTED_SINGLE_KEY]:
+			return cls._get_transformer_for_single(api_key == cls.API_NESTED_SINGLE_KEY)
+		elif api_key in [cls.API_MANY_KEY, cls.API_NESTED_MANY_KEY]:
+			return cls._get_transformer_for_many(api_key == cls.API_NESTED_MANY_KEY)
+
+	@classmethod
+	def _get_api_many_keys(cls):
+		return [cls.API_MANY_KEY, cls.API_NESTED_MANY_KEY]
+
+	@classmethod
+	def _get_api_single_keys(cls):
+		return [cls.API_SINGLE_KEY, cls.API_NESTED_SINGLE_KEY]
+
+	@classmethod
+	def _get_api_keys(cls):
+		return cls._get_api_many_keys() + cls._get_api_single_keys()
+
+	@classmethod
+	def _get_transformer_for_single(cls, nested) -> StateTransformer:
 		"""
 		Provides a StateTransformer that transforms the api representation (normally an id)
 		of this type of class into a TrelloObject-subclassing instance.
@@ -562,10 +652,11 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		if not cls.API_SINGLE_KEY or not cls.STATE_SINGLE_ATTR:
 			raise ValueError("TrelloObject-implementing classes must provide 'API_SINGLE_KEY' and "
 			                 "'STATE_SINGLE_ATTR' class attributes")
-		return StateTransformer(cls.API_SINGLE_KEY, cls.STATE_SINGLE_ATTR, api_transformer=cls.get)
+		api_key = cls.API_SINGLE_KEY if not nested else cls.API_NESTED_SINGLE_KEY
+		return StateTransformer(api_key, cls.STATE_SINGLE_ATTR, api_transformer=cls.get)
 
 	@classmethod
-	def _get_transformer_for_many(cls):
+	def _get_transformer_for_many(cls, nested: bool) -> StateTransformer:
 		"""
 		Provides a StateTransformer that transforms the api representation of a list
 		(nromally a list of ids) of this type of class into a TrelloObject-subclassing instance.
@@ -579,7 +670,8 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		if not cls.API_MANY_KEY or not cls.STATE_MANY_ATTR:
 			raise ValueError("TrelloObject-implementing classes must provide 'API_MANY_KEY' and "
 			                 "'STATE_MANY_ATTR' class attributes")
-		return StateTransformer(cls.API_MANY_KEY, cls.STATE_MANY_ATTR,
+		api_key = cls.API_MANY_KEY if not nested else cls.API_NESTED_MANY_KEY
+		return StateTransformer(api_key, cls.STATE_MANY_ATTR,
 		                        api_transformer=cls.get_many, state_transformer=ids_getter)
 
 	def _get_additional_transformers(self):
@@ -608,21 +700,17 @@ class Organization(TrelloObject):
 	"""
 	Trello organization representation.
 	"""
-	_simple_api_fields = ('billableMemberCount', 'desc', 'descData', 'displayName', 'id',
-	                      'idBoards', 'invitations', 'invited', 'logoHash', 'memberships',
-	                      'name', 'powerUps', 'prefs', 'premiumFeatures', 'products', 'url',
-	                      'website')
-	_relation_api_fields = ('idBoards',)
-
-	API_STATE_TRANSFORMERS = TrelloObject._make_simple_transformers(_simple_api_fields)
+	API_FIELDS = ('billableMemberCount', 'desc', 'descData', 'displayName', 'id',
+	              'idBoards', 'invitations', 'invited', 'logoHash', 'memberships',
+	              'name', 'powerUps', 'prefs', 'premiumFeatures', 'products', 'url',
+	              'website')
 
 	API_SINGLE_KEY = 'idOrganization'
 	STATE_SINGLE_ATTR = 'organization'
 	API_MANY_KEY = 'idOrganizations'
 	STATE_MANY_ATTR = 'organizations'
-
-	def _get_additional_transformers(self):
-		return (Board._get_transformer_for_many(),)
+	API_NESTED_MANY_KEY = 'organizations'
+	API_NESTED_SINGLE_KEY = 'organization'
 
 	@classmethod
 	@asyncio.coroutine
@@ -647,35 +735,12 @@ class Organization(TrelloObject):
 		return (yield from self.tc.create_organization(data))
 
 	def _get_api_update_from_state(self):
-		"""
-		Return dict of changes between current state and data we were
-		instantiated with.
-
-		Special handling for:
-
-		1. Setting self.desc to None.
-		2. Validates that self.website was set to an address beginning with
-			'http' as required by Trello.
-		"""
-		changes = {}
-		if self.name != self.raw_data['name']:
-			changes['name'] = self.name
-		if self.displayName != self._raw_data['displayName']:
-			changes['displayName'] = self.displayName
-		if self.desc != self._raw_data['desc']:
-			if self.desc is None:
-				changes['desc'] = ''
-			else:
-				changes['desc'] = self.desc
-
-		new_ws = '' or self.website
-		if new_ws != self._raw_data['website']:
-			if new_ws:
-				if not is_valid_website(new_ws):
-					raise ValueError('Organization.website must start with '
-					                 '"http://" or "https://')
-			else:
-				changes['website'] = new_ws
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('displayName', 'displayName'),
+			('desc', 'desc'),
+			('website', 'website')
+		])
 
 		return changes
 
@@ -683,7 +748,7 @@ class Organization(TrelloObject):
 		if not self.name or self.displayName:
 			raise ValueError("Cannot create an 'Organization' without a name or "
 			                 "displayName property on self.")
-		
+
 		return self._stripped_dict_from_fields(['name', 'displayName', 'desc', 'website'])
 
 	def __repr__(self):
@@ -694,21 +759,17 @@ class Organization(TrelloObject):
 
 
 class Board(TrelloObject):
-	_simple_api_fields = ('closed', 'dateLastActivity', 'dateLastView', 'desc', 'descData',
-	                      'id', 'invitations', 'invited', 'labelNames', 'memberships',
-	                      'name', 'pinned', 'powerUps', 'prefs', 'shortLink', 'shortUrl',
-	                      'starred', 'subscribed', 'url')
-	_relation_api_fields = ('idOrganization',)
-
-	API_STATE_TRANSFORMERS = TrelloObject._make_simple_transformers(_simple_api_fields)
+	API_FIELDS = ('closed', 'dateLastActivity', 'dateLastView', 'desc', 'descData',
+	              'id', 'idOrganization', 'invitations', 'invited', 'labelNames', 'memberships',
+	              'name', 'pinned', 'powerUps', 'prefs', 'shortLink', 'shortUrl',
+	              'starred', 'subscribed', 'url')
 
 	API_SINGLE_KEY = 'idBoard'
 	STATE_SINGLE_ATTR = 'board'
 	API_MANY_KEY = 'idBoards'
 	STATE_MANY_ATTR = 'boards'
-
-	def _get_additional_transformers(self):
-		return (Organization._get_transformer_for_single(),)
+	API_NESTED_MANY_KEY = 'boards'
+	API_NESTED_SINGLE_KEY = 'board'
 
 	@classmethod
 	@asyncio.coroutine
@@ -742,15 +803,12 @@ class Board(TrelloObject):
 		return (yield from self.tc.create_board(data))
 
 	def _get_api_update_from_state(self):
-		changes = {}
-		if self.name != self._raw_data['name']:
-			changes['name'] = self.name
-		if self.desc != self._raw_data['desc']:
-			changes['desc'] = self.desc
-		if self.closed != self._raw_data['closed']:
-			changes['closed'] = self.closed
-		if self.organization and self.organization.id != self._raw_data['idOrganization']:
-			changes['idOrganization'] = self.organization.id
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('desc', 'desc'),
+			('closed', 'closed'),
+			('organization', 'idOrganization'),
+		])
 
 		changes.update(self.prefs.get_api_update_from_state())
 
@@ -770,7 +828,7 @@ class Board(TrelloObject):
 	@asyncio.coroutine
 	def get_lists(self, inflate_children=True) -> TrelloObjectCollection:
 		lists_data = yield from self.tc.get_board_lists(self.id)
-		return (yield from Lists.get_many(lists_data, self.tc, inflate_children=True))
+		return (yield from Lists.get_many(lists_data, self.tc, inflate_children=inflate_children))
 
 	@asyncio.coroutine
 	def get_cards(self, inflate_children=True) -> TrelloObjectCollection:
@@ -842,14 +900,12 @@ class BoardPrefs:
 class Lists(TrelloObject):
 	API_FIELDS = ('closed', 'id', 'idBoard', 'name', 'pos', 'subscribed')
 
-	INFLATORS = {
-		'idBoard': 'BOARD_INFLATE'
-	}
-
-	@classmethod
-	@asyncio.coroutine
-	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
-		return (yield from tc.get_list(id_, fields="all"))
+	API_SINGLE_KEY = 'idList'
+	STATE_SINGLE_ATTR = 'list'
+	API_MANY_KEY = 'idLists'
+	STATE_MANY_ATTR = 'lists'
+	API_NESTED_MANY_KEY = 'lists'
+	API_NESTED_SINGLE_KEY = 'list'
 
 	@classmethod
 	@asyncio.coroutine
@@ -859,26 +915,44 @@ class Lists(TrelloObject):
 		lists = list(itertools.chain.from_iterable((yield from asyncio.gather(*lists_getters))))
 		return TrelloObjectCollection(lists)
 
+	@classmethod
+	@asyncio.coroutine
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
+		return (yield from tc.get_list(id_, fields="all"))
+
 	@asyncio.coroutine
 	def _delete_from_api(self):
 		raise NotImplementedError("Trello does not permit list deletion.  Try closing the list instead.")
 
 	@asyncio.coroutine
-	def _changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_list(self.id, changes))
 
+	@asyncio.coroutine
+	def _create_on_api(self, data: dict) -> dict:
+		return (yield from self.tc.create_list(data))
+
 	def _get_api_update_from_state(self):
-		changes = {}
-		if self.name != self._raw_data['name']:
-			changes['name'] = self.name
-		if self.board.id != self._raw_data['idBoard']:
-			changes['idBoard'] = self.board.id
-		if self.pos != self._raw_data['pos']:
-			changes['pos'] = self.pos
-		if self.subscribed != self._raw_data['subscribed']:
-			changes['subscribed'] = self.subscribed
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('board', 'idBoard'),
+			('pos', 'pos'),
+			('subscribed', 'subscribed')
+		])
 
 		return changes
+
+	def _get_api_create_from_state(self):
+		board_id = getattr(getattr(self, 'board', None), 'id', None)
+		if not getattr(self, 'name', None) or not board_id:
+			raise ValueError("Cannot create a 'List' without a 'name' and 'board' property.")
+
+		data = self._stripped_dict_from_fields(['name', 'displayName', 'pos'])
+
+		data['idBoard'] = board_id
+
+		return data
+
 
 	def __repr__(self):
 		if self._refreshed_at:
@@ -896,17 +970,13 @@ class Card(TrelloObject):
 	              'idChecklists', 'idLabels', 'idList', 'idMembers', 'idMembersVoted',
 	              'idShort', 'labels', 'manualCoverAttachment', 'name', 'pos',
 	              'shortLink', 'shortUrl', 'subscribed', 'url')
-	INFLATORS = {
-		'idBoard': 'BOARD_INFLATE',
-		'idChecklists': 'CHECKLISTS_INFLATE',
-		'idLabels': 'LABELS_INFLATE',
-		'idList': 'LIST_INFLATE',
-		# 'idMembers': {'dest_field': 'members', 'inflator': Member.get_many}
-	}
 
-	API_STATE_TRANSFORMERS = (
-		StateTransformer('badges', 'badges', None, None)
-	)
+	API_SINGLE_KEY = 'idCard'
+	STATE_SINGLE_ATTR = 'card'
+	API_MANY_KEY = 'idCards'
+	STATE_MANY_ATTR = 'cards'
+	API_NESTED_MANY_KEY = 'cards'
+	API_NESTED_SINGLE_KEY = 'card'
 
 	@classmethod
 	@asyncio.coroutine
@@ -933,23 +1003,42 @@ class Card(TrelloObject):
 		updated_api_data = yield from self.tc.update_card(self.id, changes)
 		return updated_api_data
 
+	@asyncio.coroutine
+	def _create_on_api(self, data: dict):
+		return (yield from self.tc.create_card(data))
+
 	def _get_api_update_from_state(self):
-		changes = {}
-		if self.name != self._raw_data['name']:
-			changes['name'] = self.name
-		if self.desc != self._raw_data['desc']:
-			changes['desc'] = self.desc
-		if self.closed != self._raw_data['closed']:
-			changes['closed'] = self.closed
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('desc', 'desc'),
+			('closed', 'closed'),
+			('pos', 'pos'),
+			('list', 'idList'),
+			('board', 'idBoard'),
+			('due', 'due'),
+			('subscribed', 'subscribed')
+		])
 
-		if 'labels' in self._raw_data and self.label_colors:
-			raw_data_colors = sorted([label['color'] for label in self._raw_data['labels']])
-			state_colors = sorted(self.label_colors)
-
-			if raw_data_colors != state_colors:
-				changes['labels'] = ','.join(state_colors)
+		postable_labels = self._postable_labels
+		if postable_labels:
+			changes['labels'] = postable_labels
 
 		return changes
+
+	def _get_api_create_from_state(self):
+		due = getattr(self, 'due', None)
+		list_id = getattr(getattr(self, 'list', None), 'id', None)
+
+		if not getattr(self, 'name', None) or not list_id:
+			raise ValueError("Cannot create a 'Card' without a 'name' and 'list' property")
+
+		data = self._stripped_dict_from_fields(['name', 'desc', 'pos'])
+		postable_labels = self._postable_labels
+		if postable_labels:
+			data['labels'] = postable_labels
+
+		return data
+
 
 	@asyncio.coroutine
 	def _state_from_api(self, api_data, inflate_children=True):
@@ -966,11 +1055,20 @@ class Card(TrelloObject):
 		yield from super(Card, self)._state_from_api(api_data, inflate_children=inflate_children)
 
 	@property
-	def label_colors(self) -> List:
+	def label_colors(self) -> List[str]:
 		"""
 		List of the label colors for this card.
 		"""
 		return [l.color for l in self.labels]
+
+	@property
+	def _postable_labels(self) -> List[str]:
+		if 'labels' in self._raw_data and self.label_colors:
+			raw_data_colors = sorted([label['color'] for label in self._raw_data['labels']])
+			state_colors = sorted(self.label_colors)
+
+			if raw_data_colors != state_colors:
+				return ','.join(state_colors)
 
 	def __repr__(self):
 		if self._refreshed_at:
@@ -982,10 +1080,19 @@ class Card(TrelloObject):
 class Checklist(TrelloObject):
 	API_FIELDS = ('cards', 'checkItems', 'id', 'idBoard', 'idCard', 'name', 'pos')
 
-	INFLATORS = {
-		'idBoard': 'BOARD_INFLATE',
-		'idCard': 'CARD_INFLATE'
-	}
+	API_SINGLE_KEY = 'idChecklist'
+	STATE_SINGLE_ATTR = 'checklist'
+	API_MANY_KEY = 'idChecklists'
+	STATE_MANY_ATTR = 'checklists'
+	API_NESTED_MANY_KEY = 'checklists'
+	API_NESTED_SINGLE_KEY = 'checklist'
+
+	def _get_additional_transformers(self):
+		checkitem_transformers = CheckItem._api_transformers(self.id)
+		return [StateTransformer(CheckItem.API_NESTED_MANY_KEY,
+		                        CheckItem.STATE_MANY_ATTR,
+		                        api_transformer=checkitem_transformers['transform_many'],
+		                        state_transformer=None)]
 
 	@classmethod
 	@asyncio.coroutine
@@ -1010,22 +1117,31 @@ class Checklist(TrelloObject):
 	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_checklist(self.id, changes))
 
-	def _get_api_update_from_state(self):
-		changes = {}
-		if self.name != self._raw_data['name']:
-			changes['name'] = self.name
-		if self.pos != self._raw_data['pos']:
-			changes['pos'] = self.pos
+	@asyncio.coroutine
+	def _create_on_api(self, data: dict):
+		return (yield from self.tc.create_checklist(data))
 
-		if hasattr(self, 'card'):
-			# if object was created with inflate_children=False, then we won't have a card instance
-			curr_id = self.card.id
-		else:
-			curr_id = self.idCard
-		if curr_id != self._raw_data['idCard']:
-			changes['idCard'] = curr_id
+	def _get_api_update_from_state(self):
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('pos', 'pos'),
+			('card', 'idCard')
+		])
 
 		return changes
+
+	def _get_api_create_from_state(self):
+		board_id = getattr(self, 'board', None)
+		card_id = getattr(self, 'card', None)
+		if not board_id or not card_id:
+			raise ValueError("Cannot create a 'Checklist' without a 'board' and 'card' property")
+
+		data = self._stripped_dict_from_fields(['name', 'pos'])
+
+		data['idBoard'] = board_id
+		data['idCard'] = card_id
+
+		return data
 
 	@property
 	def incomplete_items(self):
@@ -1039,20 +1155,6 @@ class Checklist(TrelloObject):
 			return None
 		return [ci for ci in self.check_items if ci.complete]
 
-	@asyncio.coroutine
-	def _state_from_api(self, api_data, inflate_children=True):
-		if 'checkItems' in api_data and inflate_children:
-			self.check_items = yield from CheckItem.get_many(
-				api_data['checkItems'],
-				self.tc,
-				checklist_id=api_data['id'],
-				card_id=api_data['idCard']
-			)
-
-			del api_data['checkItems']
-
-		yield from super(Checklist, self)._state_from_api(api_data, inflate_children=inflate_children)
-
 	def __repr__(self):
 		if self._refreshed_at:
 			return "<Checklist: name='{}', id='{}' ({}))>".format(self.name, self.id, self.card)
@@ -1063,15 +1165,30 @@ class Checklist(TrelloObject):
 class CheckItem(TrelloObject):
 	API_FIELDS = ('id', 'name', 'nameData', 'pos', 'state')
 
-	def __init__(self, id_: str, tc: trello_client.TrelloClient, checklist_id: str=None, card_id: str=None,
-	             **kwargs) -> None:
+	API_SINGLE_KEY = 'idCheckItem'
+	STATE_SINGLE_ATTR = 'checkitem'
+	API_MANY_KEY = 'idCheckItem'
+	STATE_MANY_ATTR = 'checkitems'
+	API_NESTED_MANY_KEY = 'checkItems'
+	API_NESTED_SINGLE_KEY = 'checkItem'
+
+	def __init__(self, tc: trello_client.TrelloClient, checklist_id: str=None, **kwargs) -> None:
 		if not checklist_id:
 			raise ValueError("Must provide checklist id to CheckItem")
-		if not card_id:
-			raise ValueError("Must provide card id to CheckItem")
 		self.checklist_id = checklist_id
-		self.card_id = card_id
-		super(CheckItem, self).__init__(id_, tc)
+		super(CheckItem, self).__init__(tc)
+
+	@classmethod
+	def _api_transformers(cls, checklist_id: str) -> Dict[str, Callable[dict]]:
+		@asyncio.coroutine
+		def transform_single(data: Union[str, dict], tc: trello_client.TrelloClient) -> Callable[dict]:
+			return cls.get(data, tc, checklist_id=checklist_id)
+
+		@asyncio.coroutine
+		def transform_many(datas: List[str, dict], tc: trello_client.TrelloClient) -> Callable[dict]:
+			return cls.get_many(datas, tc, checklist_id=checklist_id)
+
+		return {'transform_single': transform_single, 'transform_many': transform_many}
 
 	@classmethod
 	@asyncio.coroutine
@@ -1093,16 +1210,26 @@ class CheckItem(TrelloObject):
 	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_checkitem(self.card_id, self.checklist_id, self.id, changes))
 
+	@asyncio.coroutine
+	def _create_on_api(self, data: dict):
+		return (yield from self.tc.create_checkitem(self.checklist_id, data))
+
 	def _get_api_update_from_state(self):
-		changes = {}
-		if self.name != self._raw_data['name']:
-			changes['name'] = self.name
-		if self.pos != self._raw_data['pos']:
-			changes['pos'] = self.pos
-		if self.state != self._raw_data['state']:
-			changes['state'] = self.state
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('pos', 'pos'),
+			('state', 'state')
+		])
 
 		return changes
+
+	def _get_api_create_from_state(self):
+		if not getattr(self, 'name', None):
+			raise ValueError("Cannot create a 'Checklist' without a 'name' property.")
+
+		data = self._stripped_dict_from_fields(['name', 'pos', 'checked'])
+
+		return data
 
 	@property
 	def complete(self):
@@ -1133,9 +1260,12 @@ class CheckItem(TrelloObject):
 class Label(TrelloObject):
 	API_FIELDS = ('color', 'id', 'idBoard', 'name', 'uses')
 
-	INFLATORS = {
-		'idBoard': 'BOARD_INFLATE'
-	}
+	API_SINGLE_KEY = 'idLabel'
+	STATE_SINGLE_ATTR = 'label'
+	API_MANY_KEY = 'idLabels'
+	STATE_MANY_ATTR = 'labels'
+	API_NESTED_MANY_KEY = 'labels'
+	API_NESTED_SINGLE_KEY = 'label'
 
 	@classmethod
 	@asyncio.coroutine
@@ -1155,6 +1285,10 @@ class Label(TrelloObject):
 	def _changes_to_api(self, changes: dict):
 		return (yield from self.tc.update_label(self.id, changes))
 
+	@asyncio.coroutine
+	def _create_on_api(self, data: dict):
+		return (yield from self.tc.create_label(self.id, data))
+
 	@classmethod
 	@asyncio.coroutine
 	def get_labels(self, board_id: str, tc: trello_client.TrelloClient) -> 'Label':
@@ -1167,15 +1301,23 @@ class Label(TrelloObject):
 			labels.append(label)
 		return labels
 
-	@asyncio.coroutine
 	def _get_api_update_from_state(self):
-		changes = {}
-		if self.name != self._raw_data['name']:
-			changes['name'] = self.name
-		if self.color != self._raw_data['color']:
-			changes['color'] = self.color
+		changes = self._changes_from_raw_data([
+			('name', 'name'),
+			('color', 'color')
+		])
 
 		return changes
+
+	def _get_api_create_from_state(self):
+		data = self._stripped_dict_from_fields(['name', 'color'])
+
+		if not getattr(getattr(self, 'board', None), 'id', None):
+			raise ValueError("Cannot create a 'Label' without a 'Board' in a 'board' property")
+
+		data['idBoard'] = self.board.id
+
+		return data
 
 	def __repr__(self):
 		if self._refreshed_at:

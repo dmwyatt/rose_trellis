@@ -23,12 +23,14 @@ class InvalidIdError(Exception):
 class CommFail(Exception):
 	pass
 
+
 def _prepare_list_param(list_param: Union[Sequence[str], str]) -> Union[str, None]:
 	if not list_param == "default":
 		if isinstance(list_param, str):
 			# pretty up a comma-separated list of strings
 			list_param = [s.strip() for s in list_param.split(',')]
 		return ','.join(list_param)
+
 
 def _parse_batch(batch_resp: list) -> Tuple[Union[List[dict], List[tuple]]]:
 	good = []
@@ -44,6 +46,7 @@ def _parse_batch(batch_resp: list) -> Tuple[Union[List[dict], List[tuple]]]:
 				bad.append((k, v))
 
 	return good, bad
+
 
 def _dict_to_params(data: dict, field_names: List[str]) -> dict:
 	params = {}
@@ -105,21 +108,9 @@ class CachedUrlDict(dict):
 
 class TrelloClientCardMixin:
 	@asyncio.coroutine
-	def create_card(self, card_name: str, list_id: str, desc: str="", pos: str='bottom', due: str='null',
-	                labels: str='') -> dict:
-		params = {
-			"idList": list_id,
-			"name": card_name,
-			"pos": pos,
-			"due": due
-		}
-		if desc:
-			params['desc'] = desc
-		if labels:
-			params['labels'] = labels
-
+	def create_card(self, data: dict) -> dict:
 		url = 'cards'
-		return (yield from self.post(url, params))
+		return (yield from self.post(url, params=data))
 
 	def get_card_url(self, card_id: str) -> str:
 		return 'cards/{}'.format(card_id)
@@ -197,8 +188,10 @@ class TrelloClientChecklistMixin:
 		url = 'checklists/{}'.format(checklist_id)
 		return (yield from self.put(url, params=changes))
 
-
-
+	@asyncio.coroutine
+	def create_checklist(self, data: dict) -> dict:
+		url = 'checklists'
+		return (yield from self.post(url, params=data))
 
 class TrelloClientCheckItemMixin:
 	@asyncio.coroutine
@@ -221,29 +214,18 @@ class TrelloClientCheckItemMixin:
 
 		return (yield from self.put(url, params=data))
 
+	@asyncio.coroutine
+	def create_checkitem(self, data: dict) -> dict:
+		pass
+
 
 class TrelloClientBoardMixin:
 	def get_board_url(self, board_id: str) -> str:
 		return 'boards/{}'.format(board_id)
 
 	@asyncio.coroutine
-	def create_board(self,
-	                 name: str,
-	                 desc: str="",
-	                 idOrganization: str="",
-	                 powerUps: Union[Sequence[str], str]="default"):
-		# TODO: Handle board prefs
-		powerUps = _prepare_list_param(powerUps)
-		params = {"name": name}
-		if desc:
-			params['desc'] = desc
-		if idOrganization:
-			params['idOrganization'] = idOrganization
-		if powerUps:
-			params['powerUps'] = powerUps
-
-		return (yield from self.post('boards', params=params))
-
+	def create_board(self, data: dict) ->dict:
+		return (yield from self.post('boards', params=data))
 
 	@asyncio.coroutine
 	def get_board(self, board_id: str, fields: Union[Sequence[str], str]="default") -> dict:
@@ -293,6 +275,10 @@ class TrelloClientLabelMixin:
 		return (yield from self.get(url))
 
 	@asyncio.coroutine
+	def create_label(self, data: dict) ->  dict:
+		return (yield from self.post('labels', data))
+
+	@asyncio.coroutine
 	def get_labels(self, board_id: str) -> list:
 		url = 'board/{}/labels'.format(board_id)
 		return (yield from self.get(url))
@@ -340,7 +326,6 @@ class TrelloClientOrgMixin:
 		          'prefs_invitations', 'prefs_selfJoin', 'prefs_cardCovers',
 		          'prefs_background', 'prefs_cardAging']
 
-
 		return (yield from self.create(url, data, fields))
 
 
@@ -353,6 +338,11 @@ class TrelloClientListsMixin:
 		if fields:
 			params['fields'] = fields
 		return (yield from self.get(url, params=params))
+
+	@asyncio.coroutine
+	def create_list(self, data: dict) ->dict:
+		return (yield from self.post('lists', params=data))
+
 
 	@asyncio.coroutine
 	def delete_list(self, list_id: str) -> dict:
@@ -389,10 +379,12 @@ class TrelloClient(TrelloClientCardMixin,
 		err_msg = ""
 		example = "\n>>> TrelloClient(api_key='your api key here', api_token='your api token here')\n"
 		if not self._api_key:
-			err_msg += "Unable to get api key from environment variable TRELLO_API_KEY.  Either set envvar or provide it to this constructor like so: {}".format(example)
+			err_msg += "Unable to get api key from environment variable TRELLO_API_KEY.  Either set envvar or provide it to this constructor like so: {}".format(
+				example)
 
 		if not self._api_token:
-			msg = "Unable to get api token from environment variable TRELLO_API_TOKEN.  Either set envvar or provide it to this constructor like so: {}".format(example)
+			msg = "Unable to get api token from environment variable TRELLO_API_TOKEN.  Either set envvar or provide it to this constructor like so: {}".format(
+				example)
 			if not err_msg:
 				err_msg = msg
 			else:
@@ -480,7 +472,7 @@ class TrelloClient(TrelloClientCardMixin,
 			self._cache[cached_url] = json
 
 		return json
-	
+
 	@asyncio.coroutine
 	def batch_get(self, routes: List[Union[Sequence[str], str]]):
 		url = 'batch'
