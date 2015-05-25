@@ -1,6 +1,6 @@
 from unittest.mock import patch
+from rosetrellis.models import Organization
 
-from rosetrellis.models.organization import Organization
 from tests import async_test, get_mock_coro
 from tests.test_base import TestRoseTrellisBase
 
