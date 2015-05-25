@@ -1,8 +1,10 @@
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from rosetrellis.models import Board
 from tests import async_test, get_mock_coro
 from tests.test_base import TestRoseTrellisBase
+
+import rosetrellis.models
 
 
 @patch('rosetrellis.base.obj_cache.get', lambda x: None)
@@ -102,5 +104,60 @@ class TestBoard(TestRoseTrellisBase):
 
 	@async_test
 	def test_get_labels(self):
-		board = yield from Board.get({'name': 'a name', 'id': 'an id'}, self.tc)
-		labels = yield from board.get_labels()
+		Label = Mock(rosetrellis.models.Label)
+		Label.get_labels = get_mock_coro('some labels')
+		an_id = 'an id'
+		board = yield from Board.get({'name': 'a name', 'id': an_id}, self.tc)
+
+		with patch('rosetrellis.models.Label', Label):
+			labels = yield from board.get_labels()
+
+		Label.get_labels.assert_called_with(an_id, self.tc)
+
+	@async_test
+	def test_get_lists(self):
+		Lists = Mock(rosetrellis.models.Lists)
+		Lists.get_many = get_mock_coro('buncha lists')
+
+		board_lists = 'board lists'
+		self.tc.get_board_lists = get_mock_coro(board_lists)
+
+		an_id = 'an id'
+		board = yield from Board.get({'name': 'a name', 'id': an_id}, self.tc)
+
+		with patch('rosetrellis.models.Lists', Lists):
+			lists = yield from board.get_lists()
+
+		Lists.get_many.assert_called_with(board_lists, self.tc, inflate_children=True)
+
+	@async_test
+	def test_get_cards(self):
+		Card = Mock(rosetrellis.models.Card)
+		Card.get_many = get_mock_coro('buncha cards')
+
+		board_cards = 'board cards'
+		self.tc.get_board_cards = get_mock_coro(board_cards)
+
+		an_id = 'an id'
+		board = yield from Board.get({'name': 'a name', 'id': an_id}, self.tc)
+
+		with patch('rosetrellis.models.Card', Card):
+			cards = yield from board.get_cards()
+
+		Card.get_many.assert_called_with(board_cards, self.tc, inflate_children=True)
+		
+	@async_test
+	def test_get_checklists(self):
+		Checklist = Mock(rosetrellis.models.Checklist)
+		Checklist.get_many = get_mock_coro('buncha Checklists')
+
+		board_checklists = 'board Checklists'
+		self.tc.get_board_checklists = get_mock_coro(board_checklists)
+
+		an_id = 'an id'
+		board = yield from Board.get({'name': 'a name', 'id': an_id}, self.tc)
+
+		with patch('rosetrellis.models.Checklist', Checklist):
+			checklists = yield from board.get_checklists()
+
+		Checklist.get_many.assert_called_with(board_checklists, self.tc, inflate_children=True)
