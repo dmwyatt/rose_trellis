@@ -1,15 +1,12 @@
 from unittest.mock import patch
-from rosetrellis.base import obj_cache
+
 from rosetrellis.models import Board
 from tests import async_test, get_mock_coro
 from tests.test_base import TestRoseTrellisBase
 
+
 @patch('rosetrellis.base.obj_cache.get', lambda x: None)
 class TestBoard(TestRoseTrellisBase):
-	def setUp(self):
-		obj_cache.clear()
-		super(TestBoard, self).setUp()
-
 	@async_test
 	def test_get_data(self):
 		get_ret_val = 'get ret val'
@@ -91,9 +88,9 @@ class TestBoard(TestRoseTrellisBase):
 	def test_get_api_create_from_state(self):
 		an_id = 'an id'
 		board_data = {'name': 'a board',
-		            'desc': 'a description',
-		            'powerUps': 'the awesome powerups',
-		            'id': an_id}
+		              'desc': 'a description',
+		              'powerUps': 'the awesome powerups',
+		              'id': an_id}
 
 		board = yield from Board.get(board_data, self.tc)
 
