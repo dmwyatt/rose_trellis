@@ -359,6 +359,15 @@ class TrelloClientListsMixin:
 		url = "lists/{}/archiveAllCards".format(list_id)
 		return (yield from self.post(url))
 
+class TrelloClientMemberMixin:
+	@asyncio.coroutine
+	def get_member(self, id_: str="me", fields: Union[Sequence[str], str]="default") -> dict:
+		params = {}
+		fields = _prepare_list_param(fields)
+		if fields:
+			params['fields'] = fields
+		url = 'member/{}'.format(id_)
+		return (yield from self.get(url, params=params))
 
 class TrelloClient(TrelloClientCardMixin,
                    TrelloClientChecklistMixin,
@@ -366,7 +375,8 @@ class TrelloClient(TrelloClientCardMixin,
                    TrelloClientBoardMixin,
                    TrelloClientLabelMixin,
                    TrelloClientOrgMixin,
-                   TrelloClientListsMixin):
+                   TrelloClientListsMixin,
+                   TrelloClientMemberMixin):
 	def __init__(self,
 	             api_key: str=None,
 	             api_token: str=None,
