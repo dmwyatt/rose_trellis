@@ -795,7 +795,8 @@ class Organization(TrelloObject):
 	@classmethod
 	@asyncio.coroutine
 	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
-		raise NotImplementedError
+		member = yield from Member.get("me", tc)
+		return member.organizations
 
 	@asyncio.coroutine
 	def _delete_from_api(self):
