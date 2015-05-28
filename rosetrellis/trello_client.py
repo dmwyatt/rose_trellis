@@ -2,6 +2,7 @@ from asyncio import Semaphore, BaseEventLoop
 import logging
 import os
 import asyncio
+import pprint
 import random
 import time
 
@@ -327,7 +328,7 @@ class TrelloClientOrgMixin:
 
 	@asyncio.coroutine
 	def create_organization(self, data: dict) -> dict:
-		url = 'organizations'
+		url = 'organization'
 
 		if 'powerUps' in data:
 			data['powerUps'] = _prepare_list_param(data['powerUps'])
@@ -379,6 +380,11 @@ class TrelloClientMemberMixin:
 			params['fields'] = fields
 		url = 'member/{}'.format(id_)
 		return (yield from self.get(url, params=params))
+
+	@asyncio.coroutine
+	def update_member(self, id_: str, params: dict) -> dict:
+		url = 'member/{}'.format(id_)
+		return (yield from self.put(url, params=params))
 
 class TrelloClient(TrelloClientCardMixin,
                    TrelloClientChecklistMixin,
