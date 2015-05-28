@@ -705,6 +705,72 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		return changes
 
+
+class Member(TrelloObject):
+	"""
+	Trello member representation.
+	"""
+	API_FIELDS = ('avatarHash', 'avatarSource', 'bio', 'bioData', 'confirmed', 'email',
+	              'fullName', 'gravatarHash', 'id', 'idBoards', 'idBoardsPinned',
+	              'idOrganizations', 'idPremOrgsAdmin', 'initials', 'loginTypes',
+	              'memberType', 'oneTimeMessagesDismissed', 'prefs', 'premiumFeatures',
+	              'products', 'status', 'trophies', 'uploadedAvatarHash', 'url', 'username')
+
+	API_SINGLE_KEY = 'idMember'
+	STATE_SINGLE_ATTR = 'member'
+	API_MANY_KEY = 'idMembers'
+	STATE_MANY_ATTR = 'members'
+	API_NESTED_MANY_KEY = 'members'
+	API_NESTED_SINGLE_KEY = 'member'
+
+	@classmethod
+	@asyncio.coroutine
+	def _get_data(cls, id_: str, tc: trello_client.TrelloClient, **kwargs):
+		return (yield from tc.get_member(id_))
+
+	@classmethod
+	@asyncio.coroutine
+	def get_all(cls, tc: trello_client.TrelloClient, *args, inflate_children=True, **kwargs):
+		# TODO: Maybe iterate through organizations and get members from memberships
+		return (yield from cls.get_many(["me"], tc, inflate_children=inflate_children))
+
+	@classmethod
+	@asyncio.coroutine
+	def _delete_from_api(self):
+		"""
+		Members can't be deleted!
+		"""
+		raise NotImplementedError("Trello does not permit deleting of members.")
+
+	@asyncio.coroutine
+	def _changes_to_api(self, changes: dict) -> dict:
+		return (yield from self.tc.update_member(self.id, changes))
+
+	@asyncio.coroutine
+	def _create_on_api(self, data: dict) -> dict:
+		raise NotImplementedError("You must create new members at http://trello.com")
+
+	def _get_api_update_from_state(self):
+		changes = self._changes_from_raw_data([
+			('fullName', 'fullName'),
+			('initials', 'initials'),
+			('username', 'username'),
+			('bio', 'bio'),
+			('avatarSource', 'avatarSource'),
+		])
+
+		# TODO: Handle prefs/colorBlind and prefs/minutesBetweenSummaries
+
+		return changes
+
+	def _get_api_create_from_state(self) -> dict:
+		raise NotImplementedError("You must create new members at http://trello.com")
+
+	def __repr__(self):
+		return "<Member: username='{}' fullName='{}'>".format(getattr(self, 'username'),
+		                                                      getattr(self, 'fullName'))
+
+
 class Organization(TrelloObject):
 	"""
 	Trello organization representation.
