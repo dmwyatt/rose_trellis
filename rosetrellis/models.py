@@ -15,7 +15,7 @@ from typing import Any, List, Union, Sequence, Callable, Tuple, Dict
 
 import rosetrellis.base.obj_cache as obj_cache
 import rosetrellis.trello_client as trello_client
-from rosetrellis.util import Synchronizer, is_valid_website, make_sequence_attrgetter
+from rosetrellis.util import Synchronizer, make_sequence_attrgetter
 
 
 logger = logging.getLogger(__name__)
@@ -177,14 +177,13 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 	:meth:`._get_additional_transformers`.
 	"""
 
-	API_FIELDS = () #: A list of all fields we should expect from the API.
+	API_FIELDS = ()  #: A list of all fields we should expect from the API.
 	API_SINGLE_KEY = ''  #: The name used on the Trello API to represent a single instance
 	STATE_SINGLE_ATTR = ''  #: Name of attribute to use on object instances for a relation to a single object
 	API_MANY_KEY = ''  #: The name used on the Trello API to represent multiple instances
 	STATE_MANY_ATTR = ''  #: Name of attribute to use on object instances for a relation to multiple objects
-	API_NESTED_MANY_KEY = '' #: Name of key for when Trello nests the JSON for multiple objects in another instance
-	API_NESTED_SINGLE_KEY = '' #: Name of key for when Trello nests the JSON for a single object in another object
-
+	API_NESTED_MANY_KEY = ''  #: Name of key for when Trello nests the JSON for multiple objects in another instance
+	API_NESTED_SINGLE_KEY = ''  #: Name of key for when Trello nests the JSON for a single object in another object
 
 	def __init__(self, tc: trello_client.TrelloClient, *args, **kwargs) -> None:
 		"""
@@ -225,9 +224,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			if f not in data:
 				missing_api_keys.append(f)
 
-		return (not(extra_api_keys or missing_api_keys), extra_api_keys, missing_api_keys)
-
-
+		return (not (extra_api_keys or missing_api_keys), extra_api_keys, missing_api_keys)
 
 	#####################################
 	## API Retrieval methods
@@ -433,7 +430,6 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 		new_value = yield from inflator(orig_value, self.tc)
 		setattr(self, dest_field, new_value)
 
-
 	#####################################
 	## Abstract methods
 	#####################################
@@ -501,8 +497,6 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 
 		:returns: The data that is needed to POST to API.
 		"""
-
-
 
 	#####################################
 	## Transformer methods
@@ -872,7 +866,7 @@ class Board(TrelloObject):
 		raise NotImplementedError("Trello does not permit deleting of boards.  Try `Board.close()`")
 
 	@asyncio.coroutine
-	def _changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_board(self.id, changes))
 
 	@asyncio.coroutine
@@ -1030,7 +1024,6 @@ class Lists(TrelloObject):
 
 		return data
 
-
 	def __repr__(self):
 		if self._refreshed_at:
 			return "<List: name='{}', id='{}'>".format(self.name, self.id)
@@ -1076,7 +1069,7 @@ class Card(TrelloObject):
 		yield from self.tc.delete_card(self.id)
 
 	@asyncio.coroutine
-	def _changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict) -> dict:
 		updated_api_data = yield from self.tc.update_card(self.id, changes)
 		return updated_api_data
 
@@ -1115,7 +1108,6 @@ class Card(TrelloObject):
 			data['labels'] = postable_labels
 
 		return data
-
 
 	@asyncio.coroutine
 	def _state_from_api(self, api_data, inflate_children=True):
@@ -1167,9 +1159,9 @@ class Checklist(TrelloObject):
 	def _get_additional_transformers(self):
 		checkitem_transformers = CheckItem._api_transformers(self.id)
 		return [StateTransformer(CheckItem.API_NESTED_MANY_KEY,
-		                        CheckItem.STATE_MANY_ATTR,
-		                        api_transformer=checkitem_transformers['transform_many'],
-		                        state_transformer=None)]
+		                         CheckItem.STATE_MANY_ATTR,
+		                         api_transformer=checkitem_transformers['transform_many'],
+		                         state_transformer=None)]
 
 	@classmethod
 	@asyncio.coroutine
@@ -1191,7 +1183,7 @@ class Checklist(TrelloObject):
 		return (yield from self.tc.delete_checklist(self.id))
 
 	@asyncio.coroutine
-	def _changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_checklist(self.id, changes))
 
 	@asyncio.coroutine
@@ -1284,7 +1276,7 @@ class CheckItem(TrelloObject):
 		return (yield from self.tc.delete_checkitem(self.id, self.checklist.id))
 
 	@asyncio.coroutine
-	def _changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_checkitem(self.card_id, self.checklist_id, self.id, changes))
 
 	@asyncio.coroutine
@@ -1359,7 +1351,7 @@ class Label(TrelloObject):
 		return (yield from self.tc.delete_label())
 
 	@asyncio.coroutine
-	def _changes_to_api(self, changes: dict):
+	def _changes_to_api(self, changes: dict) -> dict:
 		return (yield from self.tc.update_label(self.id, changes))
 
 	@asyncio.coroutine
