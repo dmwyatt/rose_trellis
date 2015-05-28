@@ -21,8 +21,19 @@ class InvalidIdError(Exception):
 
 
 class CommFail(Exception):
-	pass
+	def __init__(self, message, url, params, status, response):
+		super(CommFail, self).__init__(message)
+		self.url = url
+		self.params = params
+		self.status = status
+		self.response = response
 
+	def __str__(self):
+		return "Error communicating with Trello:\n" \
+		       "url: {}\nparams: {}\nstatus:{}\nresponse:{}".format(self.url,
+		                                                            pprint.pformat(self.params),
+		                                                            self.status,
+		                                                            self.response)
 
 def _prepare_list_param(list_param: Union[Sequence[str], str]) -> Union[str, None]:
 	if not list_param == "default":
@@ -475,8 +486,8 @@ class TrelloClient(TrelloClientCardMixin,
 			if "invalid id" in (yield from r.text()).lower():
 				raise InvalidIdError('{} (url: {})'.format((yield from r.text()), url))
 
-			raise CommFail(
-				'Error communicating with Trello.  Status: {}, result: {}'.format(r.status, (yield from r.text())))
+			raise CommFail("Error communicating with Trello", url, params, r.status, (yield from r.text()))
+
 		json = yield from r.json()
 		if method.lower() == 'get':
 			self._cache[cached_url] = json
