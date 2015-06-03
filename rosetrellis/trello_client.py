@@ -498,6 +498,7 @@ class TrelloClient(TrelloClientCardMixin,
 				logger.debug("Throttling for {} seconds".format(throttle_time))
 				yield from asyncio.sleep(throttle_time)
 
+		logger.debug("current connections: ", self._conx_sema._value)
 		with (yield from self._conx_sema):
 			self._request_history.append(time.time())
 			r = yield from aiohttp.request(method, rosetrellis.util.join_url(url), params=params)
