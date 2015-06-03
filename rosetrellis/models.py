@@ -1204,10 +1204,10 @@ class Checklist(TrelloObject):
 	def _get_api_create_from_state(self):
 		data = self._stripped_dict_from_fields(['name', 'pos'])
 		
-		try:
-			data['idBoard'] = util.get_child_obj_id(self, 'board', 'idBoard')
-		except AttributeError:
-			raise ValueError("Cann't create a 'Checklist' without a 'board' or an 'idBoard' attribute")
+		# try:
+		# 	data['idBoard'] = util.get_child_obj_id(self, 'board', 'idBoard')
+		# except AttributeError:
+		# 	raise ValueError("Cann't create a 'Checklist' without a 'board' or an 'idBoard' attribute")
 		
 		try:
 			data['idCard'] = util.get_child_obj_id(self, 'card', 'idCard')
@@ -1302,10 +1302,10 @@ class CheckItem(TrelloObject):
 
 		data = self._stripped_dict_from_fields(['name', 'pos', 'checked'])
 		
-		try:
-			data['idBoard'] = util.get_child_obj_id(self, 'board', 'idBoard')
-		except AttributeError:
-			raise ValueError("Cannot create 'CheckItem' object without a 'board' or an 'idBoard' attribute")
+		# try:
+		# 	data['idBoard'] = util.get_child_obj_id(self, 'board', 'idBoard')
+		# except AttributeError:
+		# 	raise ValueError("Cannot create 'CheckItem' object without a 'board' or an 'idBoard' attribute")
 
 		try:
 			data['idCard'] = util.get_child_obj_id(self, 'card', 'idCard')
