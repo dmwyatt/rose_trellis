@@ -1218,15 +1218,15 @@ class Checklist(TrelloObject):
 
 	@property
 	def incomplete_items(self):
-		if not hasattr(self, 'check_items'):
+		if not hasattr(self, 'checkitems'):
 			return None
-		return [ci for ci in self.check_items if not ci.complete]
+		return [ci for ci in self.checkitems if not ci.complete]
 
 	@property
 	def complete_items(self):
-		if not hasattr(self, 'check_items'):
+		if not hasattr(self, 'checkitems'):
 			return None
-		return [ci for ci in self.check_items if ci.complete]
+		return [ci for ci in self.checkitems if ci.complete]
 
 	def __repr__(self):
 		if self._refreshed_at:
