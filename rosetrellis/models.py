@@ -12,6 +12,7 @@ import re
 
 from dateutil import parser
 from typing import Any, List, Union, Sequence, Callable, Tuple, Dict
+from rosetrellis import util
 
 import rosetrellis.base.obj_cache as obj_cache
 import rosetrellis.trello_client as trello_client
@@ -1201,16 +1202,18 @@ class Checklist(TrelloObject):
 		return changes
 
 	def _get_api_create_from_state(self):
-		board_id = getattr(self, 'board', None)
-		card_id = getattr(self, 'card', None)
-		if not board_id or not card_id:
-			raise ValueError("Cannot create a 'Checklist' without a 'board' and 'card' property")
-
 		data = self._stripped_dict_from_fields(['name', 'pos'])
-
-		data['idBoard'] = board_id
-		data['idCard'] = card_id
-
+		
+		try:
+			data['idBoard'] = util.get_child_obj_id(self, 'board', 'idBoard')
+		except AttributeError:
+			raise ValueError("Cann't create a 'Checklist' without a 'board' or an 'idBoard' attribute")
+		
+		try:
+			data['idCard'] = util.get_child_obj_id(self, 'card', 'idCard')
+		except AttributeError:
+			raise ValueError("Cann't create a 'Checklist' without a 'card' or an 'idCard' attribute")
+		
 		return data
 
 	@property
@@ -1298,6 +1301,16 @@ class CheckItem(TrelloObject):
 			raise ValueError("Cannot create a 'Checklist' without a 'name' property.")
 
 		data = self._stripped_dict_from_fields(['name', 'pos', 'checked'])
+		
+		try:
+			data['idBoard'] = util.get_child_obj_id(self, 'board', 'idBoard')
+		except AttributeError:
+			raise ValueError("Cannot create 'CheckItem' object without a 'board' or an 'idBoard' attribute")
+
+		try:
+			data['idCard'] = util.get_child_obj_id(self, 'card', 'idCard')
+		except AttributeError:
+			raise ValueError("Cannot create 'CheckItem' object without a 'card' or an 'idCard' attribute")
 
 		return data
 
