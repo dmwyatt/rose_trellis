@@ -1226,7 +1226,7 @@ class Checklist(TrelloObject):
 
 	def __repr__(self):
 		if self._refreshed_at:
-			return "<Checklist: name='{}', id='{}' ({}))>".format(self.name, self.id, self.card)
+			return "<Checklist: name='{}', id='{}' card='{}')>".format(self.name, self.id, getattr(self, 'card', None) or self.idCard)
 		else:
 			return "<Checklist: id='{}'>".format(self.id)
 
