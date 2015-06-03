@@ -90,3 +90,16 @@ class Synchronizer(metaclass=_Synchronizer):
 
 def is_valid_website(website: str) -> bool:
 		return website.startswith('http://') or website.startswith('https://')
+
+def get_child_obj_id(obj: object, obj_attr_name: str, obj_id_attr_name: str) -> str:
+	"""
+	:raises AttributeError: If don't have child object or child object does not have an id and object does not have obj_id_attr_name.
+	"""
+	if hasattr(obj, obj_attr_name):
+		child_obj = getattr(obj, obj_attr_name, None)
+		if hasattr(child_obj, 'id'):
+			child_obj_id = getattr(child_obj, 'id', None)
+			if child_obj_id:
+				return child_obj_id
+
+	return getattr(obj, obj_id_attr_name)
