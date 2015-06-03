@@ -429,7 +429,7 @@ class TrelloClient(TrelloClientCardMixin,
 		self._conx_sema = Semaphore(5)
 		self._cache = CachedUrlDict(expire_seconds=cache_for)
 
-		self._request_history = collections.deque([], 300)
+		self._request_history = collections.deque([], 100)
 
 	@asyncio.coroutine
 	def get(self, url, params=None):
