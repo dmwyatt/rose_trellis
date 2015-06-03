@@ -353,6 +353,7 @@ class TrelloObject(Synchronizer, metaclass=abc.ABCMeta):
 			delattr(self, k)
 		delattr(self, '_raw_data')
 
+	@asyncio.coroutine
 	def create(self):
 		create_data = self._get_api_create_from_state()
 		new_data = yield from self._create_on_api(create_data)
