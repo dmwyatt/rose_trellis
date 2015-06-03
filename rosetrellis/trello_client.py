@@ -227,8 +227,9 @@ class TrelloClientCheckItemMixin:
 		return (yield from self.put(url, params=data))
 
 	@asyncio.coroutine
-	def create_checkitem(self, data: dict) -> dict:
-		pass
+	def create_checkitem(self, checklist_id: str, data: dict) -> dict:
+		url = "checklists/{}/checkItems".format(checklist_id)
+		return (yield from self.post(url, params=data))
 
 
 class TrelloClientBoardMixin:
