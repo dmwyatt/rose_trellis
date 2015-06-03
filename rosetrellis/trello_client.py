@@ -3,8 +3,8 @@ import logging
 import os
 import asyncio
 import pprint
-import random
 import time
+import collections
 
 import aiohttp
 from typing import Any, Union, List, Sequence, Tuple
@@ -35,6 +35,7 @@ class CommFail(Exception):
 		                                                            pprint.pformat(self.params),
 		                                                            self.status,
 		                                                            self.response)
+
 
 def _prepare_list_param(list_param: Union[Sequence[str], str]) -> Union[str, None]:
 	if not list_param == "default":
@@ -108,6 +109,7 @@ class CachedUrlDict(dict):
 		value = super(CachedUrlDict, self).__getitem__(key)
 
 		if self._is_expired(value):
+			logger.debug('cache expiration')
 			del self[key]
 		else:
 			return value[1]
@@ -204,6 +206,7 @@ class TrelloClientChecklistMixin:
 	def create_checklist(self, data: dict) -> dict:
 		url = 'checklists'
 		return (yield from self.post(url, params=data))
+
 
 class TrelloClientCheckItemMixin:
 	@asyncio.coroutine
@@ -356,7 +359,6 @@ class TrelloClientListsMixin:
 	def create_list(self, data: dict) ->dict:
 		return (yield from self.post('lists', params=data))
 
-
 	@asyncio.coroutine
 	def delete_list(self, list_id: str) -> dict:
 		url = "lists/{}".format(list_id)
@@ -372,6 +374,7 @@ class TrelloClientListsMixin:
 		url = "lists/{}/archiveAllCards".format(list_id)
 		return (yield from self.post(url))
 
+
 class TrelloClientMemberMixin:
 	@asyncio.coroutine
 	def get_member(self, id_: str="me", fields: Union[Sequence[str], str]="default") -> dict:
@@ -386,6 +389,7 @@ class TrelloClientMemberMixin:
 	def update_member(self, id_: str, params: dict) -> dict:
 		url = 'member/{}'.format(id_)
 		return (yield from self.put(url, params=params))
+
 
 class TrelloClient(TrelloClientCardMixin,
                    TrelloClientChecklistMixin,
@@ -424,6 +428,8 @@ class TrelloClient(TrelloClientCardMixin,
 
 		self._conx_sema = Semaphore(5)
 		self._cache = CachedUrlDict(expire_seconds=cache_for)
+
+		self._request_history = collections.deque([], 300)
 
 	@asyncio.coroutine
 	def get(self, url, params=None):
@@ -468,25 +474,33 @@ class TrelloClient(TrelloClientCardMixin,
 				cached = self._cache[cached_url]
 			except KeyError:
 				# haven't cached this yet
+				logger.debug("cache miss")
 				cached = None
 
 			if cached:
 				# CACHE HIT!
+				logger.debug("cache hit")
 				return cached
 
 		params['key'] = self._api_key
 		params['token'] = self._api_token
 
-		with (yield from self._conx_sema):
-			r = yield from aiohttp.request(method, rosetrellis.util.join_url(url), params=params)
+		if len(self._request_history) == self._request_history.maxlen:
+			now = time.time()
 
-		retry_count = 0
-		while r.status == 429 and retry_count < 10:
-			with (yield from self._conx_sema):
-				r = yield from aiohttp.request(method, rosetrellis.util.join_url(url), params=params)
-			if r.status == 429 and retry_count < 10:
-				logger.warning('Rate limited by Trello!')
-				asyncio.sleep(random.random() * 5)
+			past = now - 10 * 1000
+
+			oldest_request_time = self._request_history[0]
+			oldest_request_time_delta = now - oldest_request_time
+
+			if oldest_request_time_delta <= past:
+				throttle_time = past - oldest_request_time_delta
+				logger.debug("Throttling for {} seconds".format(throttle_time))
+				yield from asyncio.sleep(throttle_time)
+
+		with (yield from self._conx_sema):
+			self._request_history.append(time.time())
+			r = yield from aiohttp.request(method, rosetrellis.util.join_url(url), params=params)
 
 		if 200 <= r.status > 299:
 			logger.error("Received bad status: %s.  Response content: %s", r.status, (yield from r.text()))
